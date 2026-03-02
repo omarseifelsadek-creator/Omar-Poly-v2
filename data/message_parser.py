@@ -30,35 +30,11 @@ from data.models import (
 logger = logging.getLogger(__name__)
 
 
-def parse_message(raw: str) -> Optional[Union[BookSnapshot, PriceChangeEvent, TradeEvent]]:
-    """
-    Parse a raw WebSocket message string into the appropriate data model.
+ParsedMessage = Union[BookSnapshot, PriceChangeEvent, TradeEvent]
 
-    Args:
-        raw: The raw JSON string from the WebSocket
 
-    Returns:
-        A typed data object, or None if the message type is unrecognized.
-
-    HOW IT WORKS:
-    1. Parse the JSON string into a Python dictionary
-    2. Look at the "event_type" field to determine what kind of message it is
-    3. Convert the dictionary into the appropriate Pydantic model
-    """
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse JSON: {e}")
-        return None
-
-    # Some messages are arrays (batch updates) — handle both
-    if isinstance(data, list):
-        # Process only the first message in a batch for now
-        # (Polymarket sometimes sends arrays)
-        if not data:
-            return None
-        data = data[0]
-
+def _parse_single(data: dict) -> Optional[ParsedMessage]:
+    """Parse a single JSON object into the appropriate data model."""
     event_type = data.get("event_type")
 
     if event_type == EventType.BOOK:
@@ -68,13 +44,45 @@ def parse_message(raw: str) -> Optional[Union[BookSnapshot, PriceChangeEvent, Tr
     elif event_type == EventType.LAST_TRADE_PRICE:
         return _parse_trade(data)
     elif event_type == EventType.TICK_SIZE_CHANGE:
-        # We log this but don't process it in MVP
         logger.info(f"Tick size changed: {data}")
         return None
     else:
-        # Unknown event type — not an error, just something we don't handle yet
         logger.debug(f"Unknown event type: {event_type}")
         return None
+
+
+def parse_messages(raw: str) -> list[ParsedMessage]:
+    """
+    Parse a raw WebSocket message, returning ALL results.
+
+    Polymarket sometimes sends arrays of messages in a single frame.
+    This function handles both single objects and arrays, returning
+    every successfully parsed message.
+    """
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse JSON: {e}")
+        return []
+
+    items = data if isinstance(data, list) else [data]
+    results = []
+    for item in items:
+        parsed = _parse_single(item)
+        if parsed is not None:
+            results.append(parsed)
+    return results
+
+
+def parse_message(raw: str) -> Optional[ParsedMessage]:
+    """
+    Parse a raw WebSocket message, returning the first result.
+
+    For callers that only need a single result. For full batch
+    support, use parse_messages() instead.
+    """
+    results = parse_messages(raw)
+    return results[0] if results else None
 
 
 def _parse_book(data: dict) -> Optional[BookSnapshot]:

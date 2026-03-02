@@ -334,17 +334,27 @@ class MarketRotator:
                 pass
         self._client = httpx.AsyncClient(timeout=10.0)
 
-        # Try next window first
-        next_start = _next_window_start()
-        window = await fetch_market_window(self._client, next_start)
+        # Try CURRENT window first — after settlement we're usually
+        # already inside the next 5-min block with time left to trade
+        current_start = _current_window_start()
+        prev_start = self.current_window.start_ts if self.current_window else 0
+        window = None
 
-        if not window:
-            # Next window might not exist yet, try current
-            current_start = _current_window_start()
+        if current_start != prev_start:
             window = await fetch_market_window(self._client, current_start)
+            # Skip if too little time left (<60s)
+            if window and window.seconds_remaining < 60:
+                logger.info(f"Current window has {window.seconds_remaining:.0f}s left, skipping to next")
+                window = None
+
+        # Current window unavailable or too short — try next
+        if not window:
+            next_start = _next_window_start()
+            window = await fetch_market_window(self._client, next_start)
 
         if not window:
             # Sometimes the slug is off by one interval — try adjacent
+            next_start = _next_window_start()
             window = await fetch_market_window(self._client, next_start + INTERVAL)
 
         if window:

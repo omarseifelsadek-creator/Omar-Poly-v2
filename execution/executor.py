@@ -171,7 +171,7 @@ class LiveExecutor(BaseExecutor):
     """
 
     def __init__(self):
-        load_dotenv()
+        load_dotenv("env")
         self._client: Optional[ClobClient] = None
 
     # ── Client init ──────────────────────────────────────────────────

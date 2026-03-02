@@ -23,7 +23,7 @@ from rich.console import Console
 from rich.text import Text
 
 from config import settings
-from data.message_parser import parse_message
+from data.message_parser import parse_messages
 from data.models import BookSnapshot, PriceChangeEvent, TradeEvent, Side
 from state.orderbook import OrderBook
 from analytics.metrics import compute_all_metrics
@@ -364,57 +364,55 @@ class PairRunner:
 
                 self._msg_count += 1
                 self._last_ws_time = time.time()
-                parsed = parse_message(raw_message)
-                if parsed is None:
-                    continue
 
-                # Route message to correct order book based on asset_id
-                asset_id = getattr(parsed, "asset_id", "")
+                for parsed in parse_messages(raw_message):
+                    # Route message to correct order book based on asset_id
+                    asset_id = getattr(parsed, "asset_id", "")
 
-                # For PriceChangeEvent, asset_id is in the changes
-                if isinstance(parsed, PriceChangeEvent):
-                    for change in parsed.price_changes:
-                        if change.asset_id == self.yes_token_id:
+                    if isinstance(parsed, PriceChangeEvent):
+                        # Check which books need updating — a single event
+                        # can contain changes for BOTH tokens
+                        has_yes = any(c.asset_id == self.yes_token_id for c in parsed.price_changes)
+                        has_no = any(c.asset_id == self.no_token_id for c in parsed.price_changes)
+                        if has_yes:
                             self._handle_price_change_for(
                                 parsed, self.yes_book, self.yes_tracker, "YES"
                             )
-                            break
-                        elif change.asset_id == self.no_token_id:
+                        if has_no:
                             self._handle_price_change_for(
                                 parsed, self.no_book, self.no_tracker, "NO"
                             )
-                            break
 
-                elif isinstance(parsed, BookSnapshot):
-                    if asset_id == self.yes_token_id:
-                        self.yes_book.apply_snapshot(parsed)
-                    elif asset_id == self.no_token_id:
-                        self.no_book.apply_snapshot(parsed)
+                    elif isinstance(parsed, BookSnapshot):
+                        if asset_id == self.yes_token_id:
+                            self.yes_book.apply_snapshot(parsed)
+                        elif asset_id == self.no_token_id:
+                            self.no_book.apply_snapshot(parsed)
 
-                elif isinstance(parsed, TradeEvent):
-                    if asset_id == self.yes_token_id:
-                        self.yes_book.apply_trade(parsed)
-                        self.yes_momentum.update(trade_price=parsed.price)
-                        self._market_tape.append({
-                            "time": parsed.timestamp_ms / 1000,
-                            "token": "YES",
-                            "size": parsed.size,
-                            "price": parsed.price,
-                            "side": parsed.side.value,
-                        })
-                    elif asset_id == self.no_token_id:
-                        self.no_book.apply_trade(parsed)
-                        self.no_momentum.update(trade_price=parsed.price)
-                        self._market_tape.append({
-                            "time": parsed.timestamp_ms / 1000,
-                            "token": "NO",
-                            "size": parsed.size,
-                            "price": parsed.price,
-                            "side": parsed.side.value,
-                        })
+                    elif isinstance(parsed, TradeEvent):
+                        if asset_id == self.yes_token_id:
+                            self.yes_book.apply_trade(parsed)
+                            self.yes_momentum.update(trade_price=parsed.price)
+                            self._market_tape.append({
+                                "time": parsed.timestamp_ms / 1000,
+                                "token": "YES",
+                                "size": parsed.size,
+                                "price": parsed.price,
+                                "side": parsed.side.value,
+                            })
+                        elif asset_id == self.no_token_id:
+                            self.no_book.apply_trade(parsed)
+                            self.no_momentum.update(trade_price=parsed.price)
+                            self._market_tape.append({
+                                "time": parsed.timestamp_ms / 1000,
+                                "token": "NO",
+                                "size": parsed.size,
+                                "price": parsed.price,
+                                "side": parsed.side.value,
+                            })
 
-                # After update, try to evaluate pair opportunity
-                await self._try_evaluate()
+                    # After each update, try to evaluate pair opportunity
+                    await self._try_evaluate()
 
         except ConnectionClosed:
             # Expected — WS dropped, outer loop will reconnect
