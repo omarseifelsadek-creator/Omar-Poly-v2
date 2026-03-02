@@ -21,10 +21,6 @@ ENV/
 # ── Logs and trade data ───────────────────────────────────────────────
 *.log
 obi.log
-data/logs/
-
-# ── Reports and generated output ─────────────────────────────────────
-*.xlsx
 
 # ── OS / editor noise ─────────────────────────────────────────────────
 .DS_Store
