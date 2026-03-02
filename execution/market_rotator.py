@@ -27,7 +27,59 @@ logger = logging.getLogger(__name__)
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
+BINANCE_API = "https://api.binance.com/api/v3"
 INTERVAL = 300  # 5 minutes in seconds
+
+
+async def fetch_btc_resolution(start_ts: int, end_ts: int) -> Optional[str]:
+    """
+    Determine BTC Up/Down winner by checking the actual BTC price.
+
+    Queries Binance for the 5-min candle covering [start_ts, end_ts].
+    If BTC closed higher than it opened → YES (Up), otherwise → NO (Down).
+
+    This is instant (single HTTP call) and doesn't depend on Polymarket's
+    slow resolution pipeline.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{BINANCE_API}/klines",
+                params={
+                    "symbol": "BTCUSDT",
+                    "interval": "5m",
+                    "startTime": start_ts * 1000,
+                    "endTime": end_ts * 1000,
+                    "limit": 1,
+                },
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            candles = resp.json()
+
+            if not candles:
+                logger.warning("BTC resolution: no candle data returned")
+                return None
+
+            candle = candles[0]
+            open_price = float(candle[1])
+            close_price = float(candle[4])
+
+            if close_price > open_price:
+                winner = "YES"
+            else:
+                winner = "NO"
+
+            logger.warning(
+                f"BTC resolution: {winner} | "
+                f"Open=${open_price:.2f} Close=${close_price:.2f} "
+                f"Δ=${close_price - open_price:+.2f}"
+            )
+            return winner
+
+    except Exception as e:
+        logger.warning(f"BTC resolution failed: {e}")
+        return None
 
 
 @dataclass
@@ -413,6 +465,7 @@ async def fetch_market_resolution(
         "YES" or "NO" if resolved, None if timed out
     """
     start = time.time()
+    last_debug = {}  # Track what API returns for timeout logging
 
     async with httpx.AsyncClient() as client:
         while (time.time() - start) < max_wait:
@@ -435,6 +488,15 @@ async def fetch_market_resolution(
                         outcome = market.get("outcome")
                         resolved = market.get("resolved", False)
                         winner = market.get("winner")
+
+                        last_debug = {
+                            "resolved": resolved,
+                            "outcome": outcome,
+                            "winner": winner,
+                            "outcomePrices": market.get("outcomePrices"),
+                            "clobTokenPrices": market.get("clobTokenPrices"),
+                            "elapsed": f"{time.time() - start:.0f}s",
+                        }
 
                         # Method 1: explicit outcome field
                         if outcome and outcome.lower() in ("yes", "up"):
@@ -506,9 +568,12 @@ async def fetch_market_resolution(
                                 return "NO"
 
             except Exception as e:
-                logger.debug(f"Resolution poll error: {e}")
+                logger.warning(f"Resolution poll error: {e}")
 
             await asyncio.sleep(poll_interval)
 
-    logger.warning(f"Resolution timed out after {max_wait}s for {market_slug}")
+    logger.warning(
+        f"Resolution timed out after {max_wait}s for {market_slug} — "
+        f"last API response: {last_debug}"
+    )
     return None

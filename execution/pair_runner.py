@@ -33,7 +33,9 @@ from execution.pair_strategy import PairTradingEngine, PairConfig, WindowResult,
 from execution.pair_logger import log_pair_buy, log_window_settlement
 from execution.executor import make_executor, BaseExecutor
 from execution.pair_dashboard import PairDashboard, build_state
-from execution.market_rotator import MarketRotator, MarketWindow, fetch_market_resolution
+from execution.market_rotator import (
+    MarketRotator, MarketWindow, fetch_market_resolution, fetch_btc_resolution,
+)
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -749,33 +751,45 @@ class PairRunner:
             console.print("[dim]  No positions to settle.[/dim]")
             return
 
-        console.print("[yellow]  Waiting for market resolution...[/yellow]")
+        console.print("[yellow]  Resolving market...[/yellow]")
 
         winner = None
 
-        # Method 1: Poll the Gamma API for actual resolution (up to 45s)
+        # Method 1: BTC price check — instant and accurate
         if self.window:
+            try:
+                winner = await fetch_btc_resolution(
+                    self.window.start_ts, self.window.end_ts,
+                )
+                if winner:
+                    console.print(f"[green]  Resolution from BTC price: {winner} won[/green]")
+            except Exception as e:
+                logger.warning(f"BTC resolution error: {e}")
+
+        # Method 2: Poll the Gamma API (fallback if Binance fails)
+        if winner is None and self.window:
+            console.print("[yellow]  BTC price unavailable, polling Gamma API...[/yellow]")
             try:
                 winner = await fetch_market_resolution(
                     market_slug=self.window.event_slug,
                     up_token_id=self.yes_token_id,
                     down_token_id=self.no_token_id,
-                    max_wait=45.0,
-                    poll_interval=3.0,
+                    max_wait=90.0,
+                    poll_interval=5.0,
                 )
                 if winner:
                     console.print(f"[green]  Resolution from API: {winner} won[/green]")
             except Exception as e:
                 logger.error(f"Resolution fetch error: {e}")
 
-        # Method 2: Fallback to order book snapshot
+        # Method 3: Fallback to order book snapshot (last resort)
         if winner is None:
             yes_mid = self.yes_book.midpoint
             yes_ask = self.yes_book.best_ask
             no_ask = self.no_book.best_ask
             winner = self.engine.determine_winner(yes_mid, yes_ask)
             console.print(
-                f"[yellow]  API resolution unavailable — using book snapshot: "
+                f"[yellow]  All resolution methods failed — guessing from book: "
                 f"{winner} (YES mid={yes_mid}, ask={yes_ask}, NO ask={no_ask})[/yellow]"
             )
 
@@ -785,7 +799,7 @@ class PairRunner:
         # Use live fills for PnL when in LIVE mode, paper engine otherwise
         if self.mode == "live" and self._live_fills:
             result = self._compute_live_settlement(winner)
-            logger.info(
+            logger.warning(
                 f"[LIVE SETTLE] Live PnL: ${result.net_pnl:+.2f} | "
                 f"Paper PnL: ${paper_result.net_pnl:+.2f} | "
                 f"Delta: ${result.net_pnl - paper_result.net_pnl:+.2f}"
