@@ -24,3 +24,8 @@ pydantic>=2.6.0
 
 # Environment variable management
 python-dotenv>=1.0.0
+
+# ── Analytics Dashboard (streamlit_dashboard.py) ──
+streamlit>=1.30.0
+plotly>=5.18.0
+pandas>=2.1.0
