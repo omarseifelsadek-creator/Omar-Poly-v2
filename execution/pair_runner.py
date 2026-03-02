@@ -105,11 +105,24 @@ class PairRunner:
         self._max_unhedged_exposure: float = 0.0            # peak unhedged $ in window
         self._hedge_times: list = []                        # time-to-hedge per pair
 
+        # Graceful stop: set by Ctrl+C, checked after window settlement
+        self._stop_requested: bool = False
+
     async def run(self):
         """Main entry point — rotates through 5-minute windows forever."""
         console.print("\n[bold cyan]═══ PAIR TRADING MODE ═══[/bold cyan]")
         console.print(f"[dim]Strategy: Accumulate matched YES/NO pairs < $0.96[/dim]")
         console.print(f"[dim]Mode: {self.mode.upper()} | Settlement at window expiry[/dim]\n")
+
+        # Install graceful stop handler — Ctrl+C once = finish window then exit
+        import signal
+        def _request_stop(sig, frame):
+            if not self._stop_requested:
+                self._stop_requested = True
+                console.print(
+                    "\n[bold yellow]⚠  Stop requested — finishing current window then exiting...[/bold yellow]"
+                )
+        signal.signal(signal.SIGINT, _request_stop)
 
         rotator = MarketRotator(token_side="auto")
         window = await rotator.start()
@@ -169,6 +182,11 @@ class PairRunner:
             # Auto-generate report every 12 windows
             if self.windows_traded > 0 and self.windows_traded % 12 == 0:
                 self._auto_report()
+
+            # Graceful stop: Ctrl+C was pressed — exit after settlement
+            if self._stop_requested:
+                console.print("[bold yellow]  Graceful stop complete. Exiting.[/bold yellow]")
+                break
 
             # Rotate to next window — NEVER give up
             console.print(f"\n[yellow]Rotating to next window...[/yellow]")
