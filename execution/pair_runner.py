@@ -10,6 +10,7 @@ This replaces the directional OBIApp for pair trading mode.
 
 import asyncio
 import json
+import os
 import time
 import logging
 from typing import Optional, Union
@@ -99,6 +100,11 @@ class PairRunner:
         self._report_fills: list = []      # Individual fills for current hour
         self._report_hour_start: str = ""  # HH:MM of first window in batch
 
+        # Per-window micro stats (reset each window)
+        self._capital_exhausted_time: Optional[int] = None  # elapsed s when cap hit
+        self._max_unhedged_exposure: float = 0.0            # peak unhedged $ in window
+        self._hedge_times: list = []                        # time-to-hedge per pair
+
     async def run(self):
         """Main entry point — rotates through 5-minute windows forever."""
         console.print("\n[bold cyan]═══ PAIR TRADING MODE ═══[/bold cyan]")
@@ -143,6 +149,9 @@ class PairRunner:
             self.yes_metrics = None
             self.no_metrics = None
             self._msg_count = 0
+            self._capital_exhausted_time = None
+            self._max_unhedged_exposure = 0.0
+            self._hedge_times = []
 
             # Run this window
             try:
@@ -514,15 +523,53 @@ class PairRunner:
             else:
                 zone = "Panic"
 
+            # ── Micro metrics ─────────────────────────────────────────
+            fill_side = action.get("side", "")
+            opp_side = "NO" if fill_side == "YES" else "YES"
+
+            # Opposite leg best ask at execution moment
+            opposite_ask = no_ask if fill_side == "YES" else yes_ask
+
+            # Time-to-Hedge: seconds from earliest opposite leg to this fill.
+            # engine.legs[-1] is the fill just committed; search earlier legs.
+            opp_legs = [l for l in self.engine.legs[:-1] if l.side == opp_side]
+            time_to_hedge = (
+                round(time.time() - opp_legs[0].timestamp, 1) if opp_legs else None
+            )
+            if time_to_hedge is not None:
+                self._hedge_times.append(time_to_hedge)
+
+            # Capital exhaustion: first moment total deployed >= cap
+            if (self._capital_exhausted_time is None and
+                    self.engine.total_capital >= self.engine.config.max_position_usd):
+                self._capital_exhausted_time = int(
+                    self.engine.window_duration - self.engine.time_remaining
+                )
+
+            # Max unhedged exposure: peak $ held in a single unbalanced leg
+            y_qty = self.engine.yes_qty
+            n_qty = self.engine.no_qty
+            if y_qty > n_qty and y_qty > 0:
+                unhedged = (y_qty - n_qty) * (self.engine.yes_cost / y_qty)
+            elif n_qty > y_qty and n_qty > 0:
+                unhedged = (n_qty - y_qty) * (self.engine.no_cost / n_qty)
+            else:
+                unhedged = 0.0
+            self._max_unhedged_exposure = max(self._max_unhedged_exposure, unhedged)
+
             self._report_fills.append({
                 "timestamp": time.strftime("%H:%M:%S"),
                 "window_id": self.window.time_label if self.window else "",
-                "token": action.get("side", ""),
+                "token": fill_side,
                 "shares": action.get("qty", 0),
                 "zone": zone,
                 "quoted_ask": raw,
                 "vwap_fill": action.get("vwap_price", raw),
                 "fee_pct": f"{action.get('fee_pct', 0):.2f}%",
+                "opposite_leg_ask": f"{opposite_ask:.4f}" if opposite_ask else "N/A",
+                "ask_age_ms": round(action.get("ask_age_ms", 0)),
+                "obi_ratio": round(obi, 3),
+                "time_to_hedge_sec": time_to_hedge if time_to_hedge is not None else "N/A",
             })
 
             # Console output (only when dashboard is not active)
@@ -684,6 +731,15 @@ class PairRunner:
             "fills_attempted": str(stats.get("fills_attempted", 0)),
             "fills_rejected": str(stats.get("fills_rejected", 0)),
             "dead_zone_blocks": str(stats.get("filter_reasons", {}).get("dead_zone_nuked", 0)),
+            "capital_exhaustion_time": (
+                str(self._capital_exhausted_time)
+                if self._capital_exhausted_time is not None else "N/A"
+            ),
+            "max_unhedged_exposure": f"{self._max_unhedged_exposure:.2f}",
+            "avg_time_to_hedge": (
+                f"{sum(self._hedge_times) / len(self._hedge_times):.1f}"
+                if self._hedge_times else "N/A"
+            ),
         })
 
         # Print settlement report

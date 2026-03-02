@@ -146,7 +146,7 @@ def _build_window_summaries(wb, windows, fills, session_pnl):
     ws.sheet_properties.tabColor = DARK_BLUE
 
     # Title
-    ws.merge_cells('A1:J1')
+    ws.merge_cells('A1:M1')
     ws['A1'] = '⚡ PolyQuant BTC 5m — Window Performance'
     ws['A1'].font = TITLE_FONT
 
@@ -156,7 +156,7 @@ def _build_window_summaries(wb, windows, fills, session_pnl):
     total_pnl = sum(_sf(w.get('net_pnl')) for w in windows)
     total_pairs = sum(_si(w.get('completed_pairs')) for w in windows)
 
-    ws.merge_cells('A2:J2')
+    ws.merge_cells('A2:M2')
     ws['A2'] = (
         f'{time.strftime("%B %d, %Y %H:%M")}  •  '
         f'{n_win} windows  •  Session PnL: ${session_pnl:+.2f}'
@@ -183,8 +183,9 @@ def _build_window_summaries(wb, windows, fills, session_pnl):
         'Window Start', 'Window End', 'Winner', 'Pairs',
         'Avg Pair Cost', 'Panic Hedges', 'Capital',
         'Net PnL', 'Rejection Rate', 'Dead Zone Blocks',
+        'Cap Exhausted At', 'Max Unhedged ($)', 'Avg Hedge Time (s)',
     ]
-    widths = [18, 18, 9, 8, 14, 14, 12, 12, 14, 17]
+    widths = [18, 18, 9, 8, 14, 14, 12, 12, 14, 17, 16, 16, 18]
 
     data_start = 6
     _header_row(ws, data_start, headers, widths)
@@ -215,6 +216,9 @@ def _build_window_summaries(wb, windows, fills, session_pnl):
             (f"${pnl:+.2f}", _money_font(pnl)),
             (rej_rate, DATA_FONT),
             (_si(w.get('dead_zone_blocks')), DATA_FONT),
+            (w.get('capital_exhaustion_time', 'N/A'), DATA_FONT),
+            (f"${_sf(w.get('max_unhedged_exposure', '0')):.2f}", DATA_FONT),
+            (w.get('avg_time_to_hedge', 'N/A'), DATA_FONT),
         ]
 
         for j, (val, font) in enumerate(vals):
@@ -224,7 +228,7 @@ def _build_window_summaries(wb, windows, fills, session_pnl):
     if windows:
         tot_r = data_start + 1 + len(windows)
         _data_cell(ws, tot_r, 1, 'TOTALS', font=BOLD_DATA, fill=TOTALS_FILL)
-        for j in range(2, 11):
+        for j in range(2, 14):
             _data_cell(ws, tot_r, j, '', fill=TOTALS_FILL)
         _data_cell(ws, tot_r, 4, total_pairs, font=BOLD_DATA, fill=TOTALS_FILL)
         total_cap = sum(_sf(w.get('total_capital')) for w in windows)
@@ -242,7 +246,7 @@ def _build_execution_log(wb, fills):
     ws = wb.create_sheet("Execution_Log")
     ws.sheet_properties.tabColor = '4CAF50'
 
-    ws.merge_cells('A1:I1')
+    ws.merge_cells('A1:M1')
     ws['A1'] = '📋 Execution Log — Every Fill'
     ws['A1'].font = TITLE_FONT
 
@@ -259,7 +263,7 @@ def _build_execution_log(wb, fills):
 
     avg_slip = total_slip / len(fills) if fills else 0
 
-    ws.merge_cells('A2:I2')
+    ws.merge_cells('A2:M2')
     ws['A2'] = (
         f'{len(fills)} fills  •  '
         f'Sniper: {sniper_n}  Value: {value_n}  Panic: {panic_n}  •  '
@@ -270,8 +274,9 @@ def _build_execution_log(wb, fills):
     headers = [
         'Timestamp', 'Window', 'Token', 'Shares',
         'Zone', 'Quoted Ask', 'VWAP Fill', 'Slippage (¢)', 'Fee %',
+        'Opp Leg Ask', 'Ask Age (ms)', 'OBI', 'Time-to-Hedge (s)',
     ]
-    widths = [14, 14, 7, 8, 9, 12, 12, 12, 8]
+    widths = [14, 14, 7, 8, 9, 12, 12, 12, 8, 12, 13, 8, 18]
 
     data_start = 4
     _header_row(ws, data_start, headers, widths)
@@ -303,6 +308,10 @@ def _build_execution_log(wb, fills):
             (f'${vwap:.4f}', DATA_FONT),
             (f'{slippage:+.2f}', slip_font),
             (f.get('fee_pct', ''), DATA_FONT),
+            (f.get('opposite_leg_ask', 'N/A'), DATA_FONT),
+            (f.get('ask_age_ms', 'N/A'), DATA_FONT),
+            (f.get('obi_ratio', 'N/A'), DATA_FONT),
+            (f.get('time_to_hedge_sec', 'N/A'), DATA_FONT),
         ]
 
         for j, (val, font) in enumerate(vals):

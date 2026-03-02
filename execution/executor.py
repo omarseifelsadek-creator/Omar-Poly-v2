@@ -215,7 +215,7 @@ class LiveExecutor(BaseExecutor):
             funder=funder,          # Proxy wallet that holds USDC
         )
 
-        logger.info(
+        logger.warning(
             f"[LIVE] ClobClient ready | "
             f"signer={self._client.get_address()} | "
             f"funder={funder[:10]}..."
@@ -312,13 +312,13 @@ class LiveExecutor(BaseExecutor):
         qty = float(action["qty"])
         vwap_price = float(action["vwap_price"])
 
-        logger.info(
+        logger.warning(
             f"[LIVE] Submitting FOK | {side} {qty:.0f} shares "
             f"@ ${vwap_price:.4f} | token={token_id[:16]}..."
         )
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self._place_order_sync(token_id, qty, vwap_price),
@@ -345,7 +345,7 @@ class LiveExecutor(BaseExecutor):
         # A FOK order that hits the book gets status "matched" or "" (live fill).
         # "unmatched" / "cancelled" means the price moved and the order was rejected.
         if order_id and status not in ("unmatched", "cancelled", "canceled", "error"):
-            logger.info(
+            logger.warning(
                 f"[LIVE] FILLED | {side} {qty:.0f} @ ${vwap_price:.4f} | "
                 f"orderID={order_id} status={status!r}"
             )
@@ -424,13 +424,13 @@ class DryRunExecutor(LiveExecutor):
         qty = float(action["qty"])
         vwap_price = float(action["vwap_price"])
 
-        logger.info(
+        logger.warning(
             f"[DRY-RUN] Signing | {side} {qty:.0f} shares "
             f"@ ${vwap_price:.4f} | token={token_id[:16]}..."
         )
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             signed = await loop.run_in_executor(
                 None,
                 lambda: self._sign_only_sync(token_id, qty, vwap_price),
@@ -445,7 +445,7 @@ class DryRunExecutor(LiveExecutor):
 
         # Log the signed order so the user can verify every field before going live.
         d = signed.dict()
-        logger.info(
+        logger.warning(
             f"[DRY-RUN] SIGNED (not posted) | {side} {qty:.0f} @ ${vwap_price:.4f}\n"
             f"  maker={d['maker']}  signer={d['signer']}\n"
             f"  signatureType={d['signatureType']}  feeRateBps={d['feeRateBps']}\n"
