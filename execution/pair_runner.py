@@ -29,7 +29,7 @@ from state.orderbook import OrderBook
 from analytics.metrics import compute_all_metrics
 from analytics.detectors import LevelTracker
 from analytics.momentum import MomentumEngine
-from execution.pair_strategy import PairTradingEngine, PairConfig, polymarket_taker_fee
+from execution.pair_strategy import PairTradingEngine, PairConfig, WindowResult, polymarket_taker_fee
 from execution.pair_logger import log_pair_buy, log_window_settlement
 from execution.executor import make_executor, BaseExecutor
 from execution.pair_dashboard import PairDashboard, build_state
@@ -104,6 +104,11 @@ class PairRunner:
         self._capital_exhausted_time: Optional[int] = None  # elapsed s when cap hit
         self._max_unhedged_exposure: float = 0.0            # peak unhedged $ in window
         self._hedge_times: list = []                        # time-to-hedge per pair
+        self._zone_counts: dict = {"Sniper": 0, "Value": 0, "Panic": 0}
+        self._slippages: list = []                          # slippage in cents per fill
+
+        # Live fill tracking — confirmed CLOB fills for current window
+        self._live_fills: list[dict] = []
 
         # Graceful stop: set by Ctrl+C, checked after window settlement
         self._stop_requested: bool = False
@@ -162,9 +167,12 @@ class PairRunner:
             self.yes_metrics = None
             self.no_metrics = None
             self._msg_count = 0
+            self._live_fills = []
             self._capital_exhausted_time = None
             self._max_unhedged_exposure = 0.0
             self._hedge_times = []
+            self._zone_counts = {"Sniper": 0, "Value": 0, "Panic": 0}
+            self._slippages = []
 
             # Run this window
             try:
@@ -513,21 +521,16 @@ class PairRunner:
             if action is None:
                 return   # live order rejected — engine state already rolled back
 
-            # Log the buy
-            market_label = f"BTC Up/Down 5m — {self.window.time_label}" if self.window else "BTC 5m"
-            fee_pct = polymarket_taker_fee(action["raw_price"]) * 100
-            action["fee_pct"] = fee_pct
+            # Track confirmed live fill for live PnL
+            if action.get("mode") == "LIVE":
+                self._live_fills.append({
+                    "side": action["side"],
+                    "qty": float(action["qty"]),
+                    "price": float(action["vwap_price"]),
+                    "cost": float(action["cost"]),
+                })
 
-            log_pair_buy(market_label, action, self.engine.get_stats(),
-                         mode=action.get("mode", "PAPER"))
-
-            # Track for dashboard (keep last 10)
-            action["timestamp"] = time.time()
-            self._recent_buys_display.append(action)
-            if len(self._recent_buys_display) > 10:
-                self._recent_buys_display = self._recent_buys_display[-10:]
-
-            # Track for hourly report
+            # ── Compute quant context for logging ──────────────────
             raw = action.get("raw_price", 0)
             t_rem = self.engine.time_remaining
             if t_rem < 60:
@@ -538,16 +541,15 @@ class PairRunner:
                 zone = "Value"
             else:
                 zone = "Panic"
+            self._zone_counts[zone] = self._zone_counts.get(zone, 0) + 1
 
-            # ── Micro metrics ─────────────────────────────────────────
             fill_side = action.get("side", "")
             opp_side = "NO" if fill_side == "YES" else "YES"
-
-            # Opposite leg best ask at execution moment
             opposite_ask = no_ask if fill_side == "YES" else yes_ask
+            best_bid = yes_bid if fill_side == "YES" else no_bid
+            spread = (action.get("raw_price", 0) - best_bid) if best_bid else 0
 
-            # Time-to-Hedge: seconds from earliest opposite leg to this fill.
-            # engine.legs[-1] is the fill just committed; search earlier legs.
+            # Time-to-Hedge: seconds from earliest opposite leg to this fill
             opp_legs = [l for l in self.engine.legs[:-1] if l.side == opp_side]
             time_to_hedge = (
                 round(time.time() - opp_legs[0].timestamp, 1) if opp_legs else None
@@ -573,6 +575,44 @@ class PairRunner:
                 unhedged = 0.0
             self._max_unhedged_exposure = max(self._max_unhedged_exposure, unhedged)
 
+            # Slippage tracking
+            vwap = action.get("vwap_price", raw)
+            slippage_cents = round((vwap - raw) * 100, 2) if raw else 0
+            self._slippages.append(slippage_cents)
+
+            # Build context dict for CSV logging
+            fill_ctx = {
+                "zone": zone,
+                "obi": obi,
+                "flow_pressure": flow,
+                "has_sweep": has_sweep,
+                "sweep_side": sweep_side,
+                "opposite_ask": opposite_ask or 0,
+                "best_bid": best_bid or 0,
+                "spread": spread,
+                "yes_bid_depth": self.yes_book.total_bid_depth,
+                "yes_ask_depth": self.yes_book.total_ask_depth,
+                "no_bid_depth": self.no_book.total_bid_depth,
+                "no_ask_depth": self.no_book.total_ask_depth,
+                "time_to_hedge_s": time_to_hedge if time_to_hedge is not None else "N/A",
+                "unhedged_usd": unhedged,
+            }
+
+            # Log the buy with full quant context
+            market_label = f"BTC Up/Down 5m — {self.window.time_label}" if self.window else "BTC 5m"
+            fee_pct = polymarket_taker_fee(action["raw_price"]) * 100
+            action["fee_pct"] = fee_pct
+
+            log_pair_buy(market_label, action, self.engine.get_stats(),
+                         ctx=fill_ctx, mode=action.get("mode", "PAPER"))
+
+            # Track for dashboard (keep last 10)
+            action["timestamp"] = time.time()
+            self._recent_buys_display.append(action)
+            if len(self._recent_buys_display) > 10:
+                self._recent_buys_display = self._recent_buys_display[-10:]
+
+            # Track for hourly report
             self._report_fills.append({
                 "timestamp": time.strftime("%H:%M:%S"),
                 "window_id": self.window.time_label if self.window else "",
@@ -662,6 +702,47 @@ class PairRunner:
             except Exception:
                 pass
 
+    def _compute_live_settlement(self, winner: str) -> WindowResult:
+        """Compute settlement PnL from confirmed live CLOB fills."""
+        yes_fills = [f for f in self._live_fills if f["side"] == "YES"]
+        no_fills = [f for f in self._live_fills if f["side"] == "NO"]
+
+        yes_qty = sum(f["qty"] for f in yes_fills)
+        no_qty = sum(f["qty"] for f in no_fills)
+        yes_cost = sum(f["cost"] for f in yes_fills)
+        no_cost = sum(f["cost"] for f in no_fills)
+        total_capital = yes_cost + no_cost
+
+        yes_avg = yes_cost / yes_qty if yes_qty > 0 else 0
+        no_avg = no_cost / no_qty if no_qty > 0 else 0
+
+        matched = min(yes_qty, no_qty)
+        avg_pair_cost = (yes_avg + no_avg) if matched > 0 else 0
+        pair_profit = matched * (1.0 - avg_pair_cost) if matched > 0 else 0
+
+        unmatched_qty = abs(yes_qty - no_qty)
+        if yes_qty > no_qty:
+            unmatched_side = "YES"
+        elif no_qty > yes_qty:
+            unmatched_side = "NO"
+        else:
+            unmatched_side = "NONE"
+
+        winning_payout = (yes_qty if winner == "YES" else no_qty) * 1.0
+        net_pnl = winning_payout - total_capital
+        gamble_result = net_pnl - pair_profit
+
+        return WindowResult(
+            yes_qty=yes_qty, no_qty=no_qty,
+            yes_avg_cost=yes_avg, no_avg_cost=no_avg,
+            total_cost=total_capital,
+            matched_pairs=matched, unmatched_qty=unmatched_qty,
+            unmatched_side=unmatched_side, winner=winner,
+            pair_profit=pair_profit, gamble_result=gamble_result,
+            net_pnl=net_pnl, avg_pair_cost=avg_pair_cost,
+            num_buys=len(self._live_fills),
+        )
+
     async def _settle_window(self):
         """Settle the current window — fetch actual resolution from Polymarket API."""
         if self.engine.yes_qty == 0 and self.engine.no_qty == 0:
@@ -698,8 +779,19 @@ class PairRunner:
                 f"{winner} (YES mid={yes_mid}, ask={yes_ask}, NO ask={no_ask})[/yellow]"
             )
 
-        # Run settlement
-        result = self.engine.settle(winner)
+        # Run settlement — always settle the paper engine to keep it clean
+        paper_result = self.engine.settle(winner)
+
+        # Use live fills for PnL when in LIVE mode, paper engine otherwise
+        if self.mode == "live" and self._live_fills:
+            result = self._compute_live_settlement(winner)
+            logger.info(
+                f"[LIVE SETTLE] Live PnL: ${result.net_pnl:+.2f} | "
+                f"Paper PnL: ${paper_result.net_pnl:+.2f} | "
+                f"Delta: ${result.net_pnl - paper_result.net_pnl:+.2f}"
+            )
+        else:
+            result = paper_result
 
         # Update cumulative stats
         self.cumulative_pnl += result.net_pnl
@@ -717,9 +809,32 @@ class PairRunner:
         }
         self._recent_buys_display = []  # Reset buys for new window
 
-        # Log to CSV
+        # Log to CSV with micro-stats
         market_label = f"BTC Up/Down 5m — {self.window.time_label}" if self.window else "BTC 5m"
-        log_window_settlement(market_label, result, self.cumulative_pnl)
+        stats = self.engine.get_stats()
+        wctx = {
+            "fills_attempted": stats.get("fills_attempted", 0),
+            "fills_rejected": stats.get("fills_rejected", 0),
+            "dead_zone_blocks": stats.get("filter_reasons", {}).get("dead_zone_nuked", 0),
+            "cap_exhausted_at_s": (
+                self._capital_exhausted_time
+                if self._capital_exhausted_time is not None else "N/A"
+            ),
+            "max_unhedged_usd": self._max_unhedged_exposure,
+            "avg_hedge_time_s": (
+                f"{sum(self._hedge_times) / len(self._hedge_times):.1f}"
+                if self._hedge_times else "N/A"
+            ),
+            "sniper_fills": self._zone_counts.get("Sniper", 0),
+            "value_fills": self._zone_counts.get("Value", 0),
+            "panic_fills": self._zone_counts.get("Panic", 0),
+            "avg_slippage_cents": (
+                f"{sum(self._slippages) / len(self._slippages):+.2f}"
+                if self._slippages else "N/A"
+            ),
+        }
+        log_window_settlement(market_label, result, self.cumulative_pnl,
+                              wctx=wctx, mode=self.mode.upper())
 
         # Track for hourly report
         win_start = ""

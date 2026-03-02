@@ -49,20 +49,34 @@ BUY_HEADER = [
     "vwap_price", "fill_price", "cost", "fee_pct",
     "order_type", "ask_age_ms", "levels_walked", "is_snipe",
     "yes_qty", "no_qty", "pair_cost", "skew",
-    "time_remaining", "mode",
+    "time_remaining",
+    # ── Quant context at fill ──
+    "zone", "obi", "flow_pressure", "sweep", "sweep_side",
+    "opposite_ask", "best_bid", "spread",
+    "yes_bid_depth", "yes_ask_depth", "no_bid_depth", "no_ask_depth",
+    "slippage_cents", "time_to_hedge_s", "unhedged_usd",
+    "mode",
 ]
 
 
-def log_pair_buy(market: str, action: dict, engine_stats: dict, mode: str = "PAPER"):
-    """Log a single leg buy."""
+def log_pair_buy(market: str, action: dict, engine_stats: dict,
+                 ctx: dict = None, mode: str = "PAPER"):
+    """Log a single leg buy with full quant context."""
+    if ctx is None:
+        ctx = {}
     filename = f"pair_buys_{_date_str()}.csv"
+
+    raw = action.get('raw_price', 0)
+    vwap = action.get('vwap_price', raw)
+    slippage_cents = round((vwap - raw) * 100, 2) if raw else 0
+
     _append_row(filename, [
         _time_str(),
         market,
         action.get("side", ""),
         action.get("qty", 0),
-        f"{action.get('raw_price', 0):.4f}",
-        f"{action.get('vwap_price', action.get('raw_price', 0)):.4f}",
+        f"{raw:.4f}",
+        f"{vwap:.4f}",
         f"{action.get('fill_price', 0):.4f}",
         f"{action.get('cost', 0):.4f}",
         f"{action.get('fee_pct', 0):.2f}%",
@@ -75,6 +89,22 @@ def log_pair_buy(market: str, action: dict, engine_stats: dict, mode: str = "PAP
         f"{engine_stats.get('pair_cost', 0):.4f}",
         f"{engine_stats.get('skew', 0):.3f}",
         f"{engine_stats.get('time_remaining', 0):.0f}",
+        # ── Quant context ──
+        ctx.get("zone", ""),
+        f"{ctx.get('obi', 0):.3f}",
+        f"{ctx.get('flow_pressure', 0):.3f}",
+        "YES" if ctx.get("has_sweep") else "NO",
+        ctx.get("sweep_side", ""),
+        f"{ctx.get('opposite_ask', 0):.4f}",
+        f"{ctx.get('best_bid', 0):.4f}",
+        f"{ctx.get('spread', 0):.4f}",
+        f"{ctx.get('yes_bid_depth', 0):.0f}",
+        f"{ctx.get('yes_ask_depth', 0):.0f}",
+        f"{ctx.get('no_bid_depth', 0):.0f}",
+        f"{ctx.get('no_ask_depth', 0):.0f}",
+        f"{slippage_cents:+.2f}",
+        ctx.get("time_to_hedge_s", "N/A"),
+        f"{ctx.get('unhedged_usd', 0):.2f}",
         mode,
     ], BUY_HEADER)
 
@@ -89,13 +119,28 @@ WINDOW_HEADER = [
     "completed_pairs", "unmatched_qty", "unmatched_side",
     "avg_pair_cost", "total_capital",
     "winner", "pair_profit", "gamble_result", "net_pnl",
-    "num_buys", "cumulative_pnl", "mode",
+    "num_buys", "cumulative_pnl",
+    # ── Window micro-stats ──
+    "fills_attempted", "fills_rejected", "rejection_rate",
+    "dead_zone_blocks", "cap_exhausted_at_s",
+    "max_unhedged_usd", "avg_hedge_time_s",
+    "sniper_fills", "value_fills", "panic_fills",
+    "avg_slippage_cents",
+    "mode",
 ]
 
 
-def log_window_settlement(market: str, result, cumulative_pnl: float):
-    """Log end-of-window settlement result."""
+def log_window_settlement(market: str, result, cumulative_pnl: float,
+                          wctx: dict = None, mode: str = "PAPER"):
+    """Log end-of-window settlement result with micro-stats."""
+    if wctx is None:
+        wctx = {}
     filename = f"pair_windows_{_date_str()}.csv"
+
+    fa = wctx.get("fills_attempted", 0)
+    fr = wctx.get("fills_rejected", 0)
+    rej_rate = f"{fr / fa * 100:.1f}%" if fa > 0 else "0.0%"
+
     _append_row(filename, [
         _time_str(),
         market,
@@ -114,5 +159,17 @@ def log_window_settlement(market: str, result, cumulative_pnl: float):
         f"{result.net_pnl:+.4f}",
         result.num_buys,
         f"{cumulative_pnl:+.4f}",
-        "PAPER",
+        # ── Micro-stats ──
+        fa,
+        fr,
+        rej_rate,
+        wctx.get("dead_zone_blocks", 0),
+        wctx.get("cap_exhausted_at_s", "N/A"),
+        f"{wctx.get('max_unhedged_usd', 0):.2f}",
+        wctx.get("avg_hedge_time_s", "N/A"),
+        wctx.get("sniper_fills", 0),
+        wctx.get("value_fills", 0),
+        wctx.get("panic_fills", 0),
+        wctx.get("avg_slippage_cents", "N/A"),
+        mode,
     ], WINDOW_HEADER)
