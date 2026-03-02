@@ -1,0 +1,33 @@
+# ── Credentials — NEVER commit these ─────────────────────────────────
+.env
+env
+*.env
+.env.*
+secrets.py
+
+# ── Python cache ──────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtual environments ──────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Logs and trade data ───────────────────────────────────────────────
+*.log
+obi.log
+data/logs/
+
+# ── Reports and generated output ─────────────────────────────────────
+*.xlsx
+
+# ── OS / editor noise ─────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp

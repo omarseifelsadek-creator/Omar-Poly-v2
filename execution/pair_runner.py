@@ -30,6 +30,7 @@ from analytics.detectors import LevelTracker
 from analytics.momentum import MomentumEngine
 from execution.pair_strategy import PairTradingEngine, PairConfig, polymarket_taker_fee
 from execution.pair_logger import log_pair_buy, log_window_settlement
+from execution.executor import make_executor, BaseExecutor
 from execution.pair_dashboard import PairDashboard, build_state
 from execution.market_rotator import MarketRotator, MarketWindow, fetch_market_resolution
 
@@ -60,6 +61,9 @@ class PairRunner:
 
         # The pair trading engine
         self.engine = PairTradingEngine(PairConfig())
+
+        # Order executor — paper (no-op) or live (real CLOB orders)
+        self.executor: BaseExecutor = make_executor(mode)
 
         # Market state
         self.window: Optional[MarketWindow] = None
@@ -383,7 +387,7 @@ class PairRunner:
                         })
 
                 # After update, try to evaluate pair opportunity
-                self._try_evaluate()
+                await self._try_evaluate()
 
         except ConnectionClosed:
             # Expected — WS dropped, outer loop will reconnect
@@ -397,7 +401,7 @@ class PairRunner:
                 change.price, change.side, change.size, msg.timestamp_ms
             )
 
-    def _try_evaluate(self):
+    async def _try_evaluate(self):
         """Evaluate pair trading opportunity with current state."""
         # Need both books initialized
         if not self.yes_book.is_initialized or not self.no_book.is_initialized:
@@ -450,6 +454,10 @@ class PairRunner:
             has_sweep = True
             sweep_side = "NO"
 
+        # Snapshot engine state BEFORE evaluate() so LiveExecutor can roll
+        # back if the real CLOB order fails. PaperExecutor returns {} here.
+        snapshot = self.executor.pre_snapshot(self.engine)
+
         # Run the pair engine evaluation
         action = self.engine.evaluate(
             yes_ask=yes_ask,
@@ -467,12 +475,26 @@ class PairRunner:
         )
 
         if action:
+            # Resolve the token ID for this leg (YES or NO side)
+            buy_token_id = (
+                self.yes_token_id if action["side"] == "YES" else self.no_token_id
+            )
+
+            # Execute — paper: instant pass-through, live: real FOK order.
+            # On live failure the engine state is restored and None is returned.
+            action = await self.executor.execute(
+                action, self.engine, snapshot, buy_token_id
+            )
+            if action is None:
+                return   # live order rejected — engine state already rolled back
+
             # Log the buy
             market_label = f"BTC Up/Down 5m — {self.window.time_label}" if self.window else "BTC 5m"
             fee_pct = polymarket_taker_fee(action["raw_price"]) * 100
             action["fee_pct"] = fee_pct
 
-            log_pair_buy(market_label, action, self.engine.get_stats())
+            log_pair_buy(market_label, action, self.engine.get_stats(),
+                         mode=action.get("mode", "PAPER"))
 
             # Track for dashboard (keep last 10)
             action["timestamp"] = time.time()

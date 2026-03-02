@@ -53,7 +53,7 @@ BUY_HEADER = [
 ]
 
 
-def log_pair_buy(market: str, action: dict, engine_stats: dict):
+def log_pair_buy(market: str, action: dict, engine_stats: dict, mode: str = "PAPER"):
     """Log a single leg buy."""
     filename = f"pair_buys_{_date_str()}.csv"
     _append_row(filename, [
@@ -75,7 +75,7 @@ def log_pair_buy(market: str, action: dict, engine_stats: dict):
         f"{engine_stats.get('pair_cost', 0):.4f}",
         f"{engine_stats.get('skew', 0):.3f}",
         f"{engine_stats.get('time_remaining', 0):.0f}",
-        "PAPER",
+        mode,
     ], BUY_HEADER)
 
 

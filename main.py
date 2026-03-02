@@ -617,8 +617,8 @@ Examples:
         help="Enable debug logging",
     )
     parser.add_argument(
-        "--mode", type=str, default="paper", choices=["paper", "live"],
-        help="Trading mode: paper (simulated) or live (real orders)",
+        "--mode", type=str, default="paper", choices=["paper", "dry-run", "live"],
+        help="Trading mode: paper (simulated) | dry-run (sign only, no post_order) | live (real orders)",
     )
     parser.add_argument(
         "--btc5m", action="store_true",
