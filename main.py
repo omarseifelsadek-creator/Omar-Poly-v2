@@ -783,7 +783,11 @@ async def run_btc5m(args):
 # ──────────────────────────────────────────────────────────────
 
 def select_pair_market():
-    """Interactive menu to pick crypto asset + timeframe for pair trading."""
+    """
+    Interactive market selector for pair trading — like the OBI monitor menu.
+    Picks crypto, timeframe, and execution mode from one place.
+    Returns (MarketSpec, mode_string).
+    """
     from execution.market_spec import make_market_spec
 
     _CRYPTO_MENU = [
@@ -797,10 +801,15 @@ def select_pair_market():
         ("1h",  "1 hour"),
         ("6h",  "6 hours"),
     ]
+    _MODE_MENU = [
+        ("paper",   "Paper",   "Simulated fills, no auth needed"),
+        ("dry-run", "Dry Run", "Signs orders but never posts them"),
+        ("live",    "Live",    "Real FOK orders to Polymarket"),
+    ]
 
-    console.print("\n[bold cyan]═══ Pair Trading — Market Selector ═══[/bold cyan]\n")
+    console.print("\n[bold cyan]═══ POLYMARKET OBI — Pair Trading ═══[/bold cyan]\n")
 
-    # Pick crypto
+    # ── Step 1: Pick crypto ──
     console.print("[bold]Select crypto:[/bold]")
     for i, (_, sym, name) in enumerate(_CRYPTO_MENU, 1):
         console.print(f"  [cyan]{i}[/cyan] — {sym} ({name})")
@@ -808,9 +817,10 @@ def select_pair_market():
     c = IntPrompt.ask("Crypto", default=1)
     c = max(1, min(c, len(_CRYPTO_MENU)))
     asset_key = _CRYPTO_MENU[c - 1][0]
+    asset_sym = _CRYPTO_MENU[c - 1][1]
 
-    # Pick timeframe
-    console.print(f"\n[bold]Select timeframe for {_CRYPTO_MENU[c - 1][1]}:[/bold]")
+    # ── Step 2: Pick timeframe ──
+    console.print(f"\n[bold]Select timeframe for {asset_sym}:[/bold]")
     for i, (_, label) in enumerate(_TF_MENU, 1):
         console.print(f"  [cyan]{i}[/cyan] — {label}")
     console.print()
@@ -818,10 +828,21 @@ def select_pair_market():
     t = max(1, min(t, len(_TF_MENU)))
     tf_key = _TF_MENU[t - 1][0]
 
+    # ── Step 3: Pick execution mode ──
+    console.print(f"\n[bold]Select execution mode:[/bold]")
+    for i, (_, label, desc) in enumerate(_MODE_MENU, 1):
+        console.print(f"  [cyan]{i}[/cyan] — {label}  [dim]({desc})[/dim]")
+    console.print()
+    m = IntPrompt.ask("Mode", default=1)
+    m = max(1, min(m, len(_MODE_MENU)))
+    mode_key = _MODE_MENU[m - 1][0]
+    mode_label = _MODE_MENU[m - 1][1]
+
+    # ── Summary ──
     spec = make_market_spec(asset_key, tf_key)
-    console.print(f"\n[green]Selected:[/green] {spec.display_name_long}")
+    console.print(f"\n[green]Selected:[/green] {spec.display_name_long}  •  [bold]{mode_label}[/bold]")
     console.print(f"[dim]Window: {spec.interval_seconds}s | Panic: {spec.panic_time_seconds}s | Slug: {spec.slug_prefix}-*[/dim]\n")
-    return spec
+    return spec, mode_key
 
 
 # ──────────────────────────────────────────────────────────────
@@ -844,10 +865,13 @@ async def main():
         from execution.pair_runner import PairRunner
         from execution.market_spec import make_market_spec
         if args.asset and args.timeframe:
+            # CLI shortcut: skip menu, use --mode flag (default paper)
             spec = make_market_spec(args.asset, args.timeframe)
+            mode = args.mode
         else:
-            spec = select_pair_market()
-        runner = PairRunner(mode=args.mode, spec=spec)
+            # Interactive menu: picks asset, timeframe, AND mode
+            spec, mode = select_pair_market()
+        runner = PairRunner(mode=mode, spec=spec)
         await runner.run()
         return
 
