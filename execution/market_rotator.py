@@ -5,17 +5,13 @@ Computes the current window from UTC time, generates the event slug,
 fetches token IDs from Gamma API, and signals when it's time to rotate
 to the next window.
 
-Supports multiple assets (BTC, ETH, SOL) and timeframes (5m, 15m, 1h, 6h)
+Supports multiple assets (BTC, ETH, SOL, XRP) and timeframes (5m, 15m, 1h, 4h)
 via the MarketSpec configuration object.
 
-SLUG FORMAT: {asset}-updown-{timeframe}-{unix_timestamp}
-The timestamp is the START of each window, rounded down to the interval boundary.
-
-Example (BTC 5m):
-  UTC 03:10:00 → btc-updown-5m-1740798600  (window 03:10-03:15)
-
-Example (ETH 1h):
-  UTC 14:00:00 → eth-updown-1h-1740837600  (window 14:00-15:00)
+SLUG FORMATS:
+  5m/15m/4h: {asset}-updown-{tf}-{unix}  → btc-updown-5m-1740798600
+  1h:        {name}-up-or-down-{month}-{day}-{hour}{ampm}-et
+             → bitcoin-up-or-down-march-5-5pm-et
 """
 
 import time
@@ -226,7 +222,7 @@ async def fetch_market_window(
     if window_start is None:
         window_start = _current_window_start(interval)
 
-    event_slug = f"{spec.slug_prefix}-{window_start}"
+    event_slug = spec.build_event_slug(window_start)
     fallback_question = f"{spec.display_name_long} {time.strftime('%H:%M', time.gmtime(window_start))}"
 
     try:

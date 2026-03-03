@@ -634,13 +634,13 @@ Examples:
     )
     parser.add_argument(
         "--asset", type=str, default=None,
-        choices=["btc", "eth", "sol"],
-        help="Crypto asset for pair trading (btc, eth, sol). Skips interactive menu.",
+        choices=["btc", "eth", "sol", "xrp"],
+        help="Crypto asset for pair trading (btc, eth, sol, xrp). Skips interactive menu.",
     )
     parser.add_argument(
         "--timeframe", type=str, default=None,
-        choices=["5m", "15m", "1h", "6h"],
-        help="Timeframe for pair trading (5m, 15m, 1h, 6h). Skips interactive menu.",
+        choices=["5m", "15m", "1h", "4h"],
+        help="Timeframe for pair trading (5m, 15m, 1h, 4h). Skips interactive menu.",
     )
     return parser.parse_args()
 
@@ -794,12 +794,13 @@ def select_pair_market():
         ("btc", "BTC", "Bitcoin"),
         ("eth", "ETH", "Ethereum"),
         ("sol", "SOL", "Solana"),
+        ("xrp", "XRP", "Ripple"),
     ]
     _TF_MENU = [
         ("5m",  "5 minutes"),
         ("15m", "15 minutes"),
         ("1h",  "1 hour"),
-        ("6h",  "6 hours"),
+        ("4h",  "4 hours"),
     ]
     _MODE_MENU = [
         ("paper",   "Paper",   "Simulated fills, no auth needed"),

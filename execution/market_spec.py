@@ -6,13 +6,15 @@ configuration object that flows through the entire stack.
 
 USAGE:
     from execution.market_spec import make_market_spec
-    spec = make_market_spec("eth", "1h")
-    print(spec.slug_prefix)        # "eth-updown-1h"
+    spec = make_market_spec("eth", "15m")
+    print(spec.slug_prefix)        # "eth-updown-15m"
     print(spec.binance_symbol)     # "ETHUSDT"
-    print(spec.panic_time_seconds) # 120.0
+    print(spec.panic_time_seconds) # 29.7
 """
 
 from dataclasses import dataclass
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True)
@@ -20,15 +22,35 @@ class MarketSpec:
     """Immutable specification for a crypto asset + timeframe pair."""
 
     # Identity
-    asset: str              # "BTC", "ETH", "SOL"
-    timeframe: str          # "5m", "15m", "1h", "6h"
+    asset: str              # "BTC", "ETH", "SOL", "XRP"
+    timeframe: str          # "5m", "15m", "1h", "4h"
 
     # Derived constants
-    interval_seconds: int   # 300, 900, 3600, 21600
+    interval_seconds: int   # 300, 900, 3600, 14400
     binance_symbol: str     # "BTCUSDT", "ETHUSDT", "SOLUSDT"
     binance_interval: str   # "5m", "15m", "1h", "6h"
     chainlink_symbol: str   # "btc/usd", "eth/usd", "sol/usd"
     slug_prefix: str        # "btc-updown-5m", "eth-updown-1h", etc.
+
+    # ── Slug construction ──
+
+    def build_event_slug(self, window_start: int) -> str:
+        """Build the Polymarket event slug for a specific window.
+
+        5m/15m/4h use timestamp slugs: btc-updown-5m-1772581500
+        1h uses human-readable slugs:  bitcoin-up-or-down-march-5-5pm-et
+        """
+        if self.timeframe != "1h":
+            return f"{self.slug_prefix}-{window_start}"
+
+        et = ZoneInfo("America/New_York")
+        dt = datetime.fromtimestamp(window_start, tz=et)
+        month = dt.strftime("%B").lower()
+        day = dt.day
+        hour_12 = int(dt.strftime("%I"))
+        ampm = dt.strftime("%p").lower()
+        name = _FULL_NAMES[self.asset.lower()]
+        return f"{name}-up-or-down-{month}-{day}-{hour_12}{ampm}-et"
 
     # ── Display ──
 
@@ -50,9 +72,7 @@ class MarketSpec:
         because order books stay deep longer — no sudden liquidity cliff."""
         if self.interval_seconds <= 900:        # 5m, 15m: 3.3%
             return round(self.interval_seconds * 0.033, 1)
-        elif self.interval_seconds <= 3600:     # 1h: 1.7%
-            return round(self.interval_seconds * 0.017, 1)
-        else:                                    # 6h: 1.0%
+        else:                                    # 1h, 4h: 1.0%
             return round(self.interval_seconds * 0.010, 1)
 
     @property
@@ -61,9 +81,7 @@ class MarketSpec:
         ratio because per-second order flow is thinner."""
         if self.interval_seconds <= 900:        # 5m, 15m: 60%
             return round(self.interval_seconds * 0.60, 1)
-        elif self.interval_seconds <= 3600:     # 1h: 75%
-            return round(self.interval_seconds * 0.75, 1)
-        else:                                    # 6h: 80%
+        else:                                    # 1h, 4h: 80%
             return round(self.interval_seconds * 0.80, 1)
 
     @property
@@ -72,9 +90,7 @@ class MarketSpec:
         books stay liquid — no need to block new opens early."""
         if self.interval_seconds <= 900:        # 5m, 15m: 10%
             return round(self.interval_seconds * 0.10, 1)
-        elif self.interval_seconds <= 3600:     # 1h: 5%
-            return round(self.interval_seconds * 0.05, 1)
-        else:                                    # 6h: 3%
+        else:                                    # 1h, 4h: 3%
             return round(self.interval_seconds * 0.03, 1)
 
     @property
@@ -84,9 +100,7 @@ class MarketSpec:
         if self.interval_seconds <= 900:        # 5m: 30%, 15m: 25%
             ratio = 0.30 if self.interval_seconds <= 300 else 0.25
             return round(self.interval_seconds * ratio, 1)
-        elif self.interval_seconds <= 3600:     # 1h: 15%
-            return round(self.interval_seconds * 0.15, 1)
-        else:                                    # 6h: 10%
+        else:                                    # 1h, 4h: 10%
             return round(self.interval_seconds * 0.10, 1)
 
     @property
@@ -97,7 +111,7 @@ class MarketSpec:
     @property
     def window_skip_threshold_s(self) -> float:
         """Skip a window if fewer than this many seconds remain."""
-        # 20% for short windows (5m/15m), 10% for long windows (1h/6h)
+        # 20% for short windows (5m/15m), 10% for long windows (1h/4h)
         ratio = 0.10 if self.interval_seconds >= 3600 else 0.20
         return max(60.0, round(self.interval_seconds * ratio, 1))
 
@@ -114,11 +128,16 @@ class MarketSpec:
 # REGISTRY
 # ══════════════════════════════════════════════════════════════
 
+_FULL_NAMES: dict[str, str] = {
+    "btc": "bitcoin", "eth": "ethereum", "sol": "solana", "xrp": "xrp",
+}
+
 _ASSETS: dict[str, tuple[str, str]] = {
     # asset_key: (binance_symbol, chainlink_symbol)
     "btc": ("BTCUSDT", "btc/usd"),
     "eth": ("ETHUSDT", "eth/usd"),
     "sol": ("SOLUSDT", "sol/usd"),
+    "xrp": ("XRPUSDT", "xrp/usd"),
 }
 
 _TIMEFRAMES: dict[str, tuple[int, str]] = {
@@ -126,7 +145,7 @@ _TIMEFRAMES: dict[str, tuple[int, str]] = {
     "5m":  (300,   "5m"),
     "15m": (900,   "15m"),
     "1h":  (3600,  "1h"),
-    "6h":  (21600, "6h"),
+    "4h":  (14400, "4h"),
 }
 
 SUPPORTED_ASSETS = list(_ASSETS.keys())
@@ -138,8 +157,8 @@ def make_market_spec(asset: str, timeframe: str) -> MarketSpec:
     Create a MarketSpec from user-friendly names.
 
     Args:
-        asset: "btc", "eth", or "sol" (case-insensitive)
-        timeframe: "5m", "15m", "1h", or "6h"
+        asset: "btc", "eth", "sol", or "xrp" (case-insensitive)
+        timeframe: "5m", "15m", "1h", or "4h"
 
     Raises:
         ValueError if asset or timeframe is unknown.
