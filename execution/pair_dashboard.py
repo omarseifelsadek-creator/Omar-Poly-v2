@@ -70,6 +70,7 @@ def build_state(runner) -> dict:
         "wn": getattr(runner, "windows_traded", 0) + 1,
         "msgs": getattr(runner, "_msg_count", 0),
         "ws_t": getattr(runner, "_last_ws_time", 0),
+        "vol": getattr(runner, "_window_volume", 0),
         "yes": {"bid": yb, "ask": ya, "mid": ym, "spread": ys,
                 "bid_sz": ybs, "ask_sz": yas_sz, "bid_depth": y_bd, "ask_depth": y_ad},
         "no": {"bid": nb, "ask": na, "mid": nm, "spread": ns,
@@ -197,6 +198,9 @@ class PairDashboard:
         tx.append(f"  Msgs:{s.get('msgs',0):,}", style="dim")
         tx.append("  Lag:", style="dim")
         tx.append(f"{lag:.0f}ms", style=lc)
+        vol = s.get("vol", 0)
+        tx.append("  Vol:", style="dim")
+        tx.append(f"{vol:,.0f}", style="bold white")
 
         bc = "bold red" if panic and self.blink else "cyan"
         return Panel(tx, border_style=bc, height=3)

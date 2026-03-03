@@ -182,6 +182,7 @@ class PairRunner:
         self._dashboard = PairDashboard()
         self._live = False  # True when dashboard has terminal control
         self._market_tape = deque(maxlen=12)  # Last 12 market trades for flow tape
+        self._window_volume: float = 0.0     # Total shares traded this window
 
         # In-memory report buffers (flushed every 12 windows)
         self._report_windows: list = []    # Window summaries for current hour
@@ -267,6 +268,7 @@ class PairRunner:
             self._hedge_times = []
             self._zone_counts = {"Sniper": 0, "Value": 0, "Panic": 0}
             self._slippages = []
+            self._window_volume = 0.0
 
             # Snapshot Chainlink BTC price at window open
             self._chainlink.snapshot_open()
@@ -496,6 +498,7 @@ class PairRunner:
                             self.no_book.apply_snapshot(parsed)
 
                     elif isinstance(parsed, TradeEvent):
+                        self._window_volume += parsed.size
                         if asset_id == self.yes_token_id:
                             self.yes_book.apply_trade(parsed)
                             self.yes_momentum.update(trade_price=parsed.price)
