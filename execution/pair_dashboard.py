@@ -57,10 +57,10 @@ def build_state(runner) -> dict:
         ybs = yas_sz = nbs = nas_sz = 0
         y_bd = y_ad = n_bd = n_ad = 0
 
-    mkt = "BTC Up/Down 5m"
+    mkt = runner.spec.display_name_long
     try:
         if runner.window:
-            mkt = f"BTC 5m — {runner.window.time_label}"
+            mkt = f"{runner.spec.display_name} — {runner.window.time_label}"
     except Exception:
         pass
 
@@ -96,6 +96,8 @@ def build_state(runner) -> dict:
             "tp": getattr(runner, "total_pairs", 0),
             "last": getattr(runner, "_last_window_result", {}),
         },
+        "panic_s": runner.spec.panic_time_seconds,
+        "half_s": runner.spec.theta_half_size_until_s,
     }
 
 
@@ -187,7 +189,9 @@ class PairDashboard:
         lag = (time.time() - s.get("ws_t", 0)) * 1000 if s.get("ws_t", 0) > 0 else 0
 
         lc = "green" if lag < 100 else "yellow" if lag < 300 else "bold red"
-        tc = "bold green" if t_rem > 60 else "bold yellow" if t_rem > 30 else ("bold red" if self.blink else "dim red")
+        half_s = s.get("half_s", 30)
+        panic_s = s.get("panic_s", 10)
+        tc = "bold green" if t_rem > half_s else "bold yellow" if t_rem > panic_s else ("bold red" if self.blink else "dim red")
 
         tx = Text()
         tx.append(" ⚡ ", style="bold cyan")

@@ -78,6 +78,10 @@ CLOB_HOST = "https://clob.polymarket.com"
 class BaseExecutor(ABC):
     """Common interface for all executor implementations."""
 
+    def warm_up(self, token_ids: list[str]) -> None:
+        """Pre-warm connections and caches. No-op for paper mode."""
+        pass
+
     def pre_snapshot(self, engine) -> dict:
         """
         Snapshot mutable engine state BEFORE evaluate() runs.
@@ -220,6 +224,22 @@ class LiveExecutor(BaseExecutor):
             f"signer={self._client.get_address()} | "
             f"funder={funder[:10]}..."
         )
+
+    # ── Pre-warm ───────────────────────────────────────────────────
+
+    def warm_up(self, token_ids: list[str]) -> None:
+        """Pre-warm TLS connection + cache tick_size and neg_risk for tokens.
+
+        Called once per window with both YES and NO token IDs.
+        Moves the cold-start penalty (~80-130ms) from the first order
+        to the setup phase where latency doesn't matter.
+        """
+        self._ensure_client()
+        self._client.get_ok()                       # TLS + HTTP/2 handshake
+        for tid in token_ids:
+            self._client.get_tick_size(tid)          # cache tick size (300s TTL)
+            self._client.get_neg_risk(tid)           # cache neg_risk (indefinite)
+        logger.info(f"[LIVE] Warmed up {len(token_ids)} tokens")
 
     # ── Snapshot / rollback ──────────────────────────────────────────
 

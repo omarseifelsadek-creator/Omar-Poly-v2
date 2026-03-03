@@ -33,8 +33,9 @@ from execution.pair_strategy import PairTradingEngine, PairConfig, WindowResult,
 from execution.pair_logger import log_pair_buy, log_window_settlement
 from execution.executor import make_executor, BaseExecutor
 from execution.pair_dashboard import PairDashboard, build_state
+from execution.market_spec import MarketSpec, make_market_spec
 from execution.market_rotator import (
-    MarketRotator, MarketWindow, fetch_market_resolution, fetch_btc_resolution,
+    MarketRotator, MarketWindow, fetch_market_resolution, fetch_price_resolution,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,9 +45,10 @@ CHAINLINK_WS = "wss://ws-live-data.polymarket.com"
 
 
 class ChainlinkTracker:
-    """Track BTC/USD price from Polymarket's Chainlink data stream."""
+    """Track crypto price from Polymarket's Chainlink data stream."""
 
-    def __init__(self):
+    def __init__(self, symbol: str = "btc/usd"):
+        self.symbol = symbol
         self.latest_price: Optional[float] = None
         self.latest_ts: float = 0.0
         self.window_open_price: Optional[float] = None
@@ -89,22 +91,22 @@ class ChainlinkTracker:
         return winner
 
     async def _ws_loop(self):
-        """Connect to Polymarket Chainlink stream and track BTC/USD."""
+        """Connect to Polymarket Chainlink stream and track price."""
         while self._running:
             try:
                 async with websockets.connect(
                     CHAINLINK_WS, ping_interval=30, ping_timeout=10,
                 ) as ws:
-                    # Subscribe to Chainlink BTC/USD
+                    # Subscribe to Chainlink price feed
                     await ws.send(json.dumps({
                         "action": "subscribe",
                         "subscriptions": [{
                             "topic": "crypto_prices_chainlink",
                             "type": "*",
-                            "filters": '{"symbol":"btc/usd"}',
+                            "filters": json.dumps({"symbol": self.symbol}),
                         }],
                     }))
-                    logger.info("[CHAINLINK] Subscribed to BTC/USD price stream")
+                    logger.info(f"[CHAINLINK] Subscribed to {self.symbol.upper()} price stream")
 
                     async for raw in ws:
                         if not self._running:
@@ -129,14 +131,17 @@ class ChainlinkTracker:
 
 class PairRunner:
     """
-    Runs pair trading on BTC 5-minute markets.
+    Runs pair trading on crypto Up/Down markets.
 
     Manages two order books (YES/NO), feeds both to PairTradingEngine,
     and handles window rotation with settlement.
+
+    Supports any asset/timeframe via MarketSpec.
     """
 
-    def __init__(self, mode: str = "paper"):
+    def __init__(self, mode: str = "paper", spec: MarketSpec = None):
         self.mode = mode
+        self.spec = spec or make_market_spec("btc", "5m")
 
         # Two separate order books
         self.yes_book = OrderBook()
@@ -148,8 +153,14 @@ class PairRunner:
         self.yes_momentum = MomentumEngine()
         self.no_momentum = MomentumEngine()
 
-        # The pair trading engine
-        self.engine = PairTradingEngine(PairConfig())
+        # The pair trading engine — timing params from MarketSpec
+        config = PairConfig(
+            panic_time_seconds=self.spec.panic_time_seconds,
+            theta_full_size_until_s=self.spec.theta_full_size_until_s,
+            theta_half_size_until_s=self.spec.theta_half_size_until_s,
+            sniper_signal_min_time=self.spec.sniper_signal_min_time,
+        )
+        self.engine = PairTradingEngine(config, window_duration=float(self.spec.interval_seconds))
 
         # Order executor — paper (no-op) or live (real CLOB orders)
         self.executor: BaseExecutor = make_executor(mode)
@@ -199,8 +210,8 @@ class PairRunner:
         # Live fill tracking — confirmed CLOB fills for current window
         self._live_fills: list[dict] = []
 
-        # Chainlink BTC/USD price tracker — same source as Polymarket resolution
-        self._chainlink = ChainlinkTracker()
+        # Chainlink price tracker — same source as Polymarket resolution
+        self._chainlink = ChainlinkTracker(symbol=self.spec.chainlink_symbol)
 
         # Graceful stop: set by Ctrl+C, checked after window settlement
         self._stop_requested: bool = False
@@ -221,14 +232,14 @@ class PairRunner:
                 )
         signal.signal(signal.SIGINT, _request_stop)
 
-        # Start Chainlink BTC/USD price stream (runs alongside order book WS)
+        # Start Chainlink price stream (runs alongside order book WS)
         self._chainlink.start()
 
-        rotator = MarketRotator(token_side="auto")
+        rotator = MarketRotator(spec=self.spec, token_side="auto")
         window = await rotator.start()
 
         if not window:
-            console.print("[red]Could not find BTC 5-min market. Retrying...[/red]")
+            console.print(f"[red]Could not find {self.spec.display_name} market. Retrying...[/red]")
             await asyncio.sleep(10)
             window = await rotator.start()
 
@@ -270,8 +281,14 @@ class PairRunner:
             self._slippages = []
             self._window_volume = 0.0
 
-            # Snapshot Chainlink BTC price at window open
+            # Snapshot Chainlink price at window open
             self._chainlink.snapshot_open()
+
+            # Pre-warm executor (TLS + tick_size + neg_risk caches)
+            try:
+                self.executor.warm_up([self.yes_token_id, self.no_token_id])
+            except Exception as e:
+                logger.warning(f"Executor warm-up failed (non-fatal): {e}")
 
             # Run this window
             try:
@@ -329,7 +346,7 @@ class PairRunner:
                     await rotator.stop()
                 except Exception:
                     pass
-                rotator = MarketRotator(token_side="auto")
+                rotator = MarketRotator(spec=self.spec, token_side="auto")
                 window = await rotator.start()
 
                 if window:
@@ -634,7 +651,7 @@ class PairRunner:
             # ── Compute quant context for logging ──────────────────
             raw = action.get("raw_price", 0)
             t_rem = self.engine.time_remaining
-            if t_rem < 60:
+            if t_rem < self.engine.config.panic_time_seconds:
                 zone = "Panic"
             elif raw <= 0.35:
                 zone = "Sniper"
@@ -700,7 +717,7 @@ class PairRunner:
             }
 
             # Log the buy with full quant context
-            market_label = f"BTC Up/Down 5m — {self.window.time_label}" if self.window else "BTC 5m"
+            market_label = f"{self.spec.display_name_long} — {self.window.time_label}" if self.window else self.spec.display_name
             fee_pct = polymarket_taker_fee(action["raw_price"]) * 100
             action["fee_pct"] = fee_pct
 
@@ -854,18 +871,19 @@ class PairRunner:
 
         winner = None
 
-        # Method 1: Chainlink BTC/USD — exact same source as Polymarket resolution
+        # Method 1: Chainlink — exact same source as Polymarket resolution
         if self._chainlink.latest_price and self._chainlink.window_open_price:
             winner = self._chainlink.resolve()
             if winner:
                 console.print(f"[green]  Resolution from Chainlink: {winner} won[/green]")
 
-        # Method 2: Binance BTC candle (fallback if Chainlink stream disconnected)
+        # Method 2: Binance candle (fallback if Chainlink stream disconnected)
         if winner is None and self.window:
             console.print("[yellow]  Chainlink unavailable, checking Binance...[/yellow]")
             try:
-                winner = await fetch_btc_resolution(
+                winner = await fetch_price_resolution(
                     self.window.start_ts, self.window.end_ts,
+                    spec=self.spec,
                 )
                 if winner:
                     console.print(f"[green]  Resolution from Binance: {winner} won[/green]")
@@ -930,7 +948,7 @@ class PairRunner:
         self._recent_buys_display = []  # Reset buys for new window
 
         # Log to CSV with micro-stats
-        market_label = f"BTC Up/Down 5m — {self.window.time_label}" if self.window else "BTC 5m"
+        market_label = f"{self.spec.display_name_long} — {self.window.time_label}" if self.window else self.spec.display_name
         stats = self.engine.get_stats()
         wctx = {
             "fills_attempted": stats.get("fills_attempted", 0),
@@ -1037,7 +1055,7 @@ class PairRunner:
                 console.print("[yellow]  Auto-report: no window data buffered.[/yellow]")
                 return
 
-            # Smart file naming: PolyQuant_BTC5m_{Date}_{Start}_to_{End}.xlsx
+            # Smart file naming: PolyQuant_{Asset}{TF}_{Date}_{Start}_to_{End}.xlsx
             date_str = time.strftime("%Y-%m-%d")
             hour_start = self._report_hour_start or "0000"
             hour_start_clean = hour_start.replace(":", "")
@@ -1047,7 +1065,7 @@ class PairRunner:
             hour_end = last_win.get("window_end_time", "")
             hour_end_clean = hour_end.replace(":", "") if hour_end else time.strftime("%H%M")
 
-            filename = f"PolyQuant_BTC5m_{date_str}_{hour_start_clean}_to_{hour_end_clean}.xlsx"
+            filename = f"PolyQuant_{self.spec.asset}{self.spec.timeframe}_{date_str}_{hour_start_clean}_to_{hour_end_clean}.xlsx"
             filepath = os.path.join("data/logs", filename)
 
             path = generate_from_memory(

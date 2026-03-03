@@ -632,6 +632,16 @@ Examples:
         "--pairs", action="store_true",
         help="Pair trading mode: accumulate YES+NO pairs for guaranteed profit",
     )
+    parser.add_argument(
+        "--asset", type=str, default=None,
+        choices=["btc", "eth", "sol"],
+        help="Crypto asset for pair trading (btc, eth, sol). Skips interactive menu.",
+    )
+    parser.add_argument(
+        "--timeframe", type=str, default=None,
+        choices=["5m", "15m", "1h", "6h"],
+        help="Timeframe for pair trading (5m, 15m, 1h, 6h). Skips interactive menu.",
+    )
     return parser.parse_args()
 
 
@@ -769,6 +779,52 @@ async def run_btc5m(args):
 
 
 # ──────────────────────────────────────────────────────────────
+# PAIR TRADING — ASSET / TIMEFRAME SELECTOR
+# ──────────────────────────────────────────────────────────────
+
+def select_pair_market():
+    """Interactive menu to pick crypto asset + timeframe for pair trading."""
+    from execution.market_spec import make_market_spec
+
+    _CRYPTO_MENU = [
+        ("btc", "BTC", "Bitcoin"),
+        ("eth", "ETH", "Ethereum"),
+        ("sol", "SOL", "Solana"),
+    ]
+    _TF_MENU = [
+        ("5m",  "5 minutes"),
+        ("15m", "15 minutes"),
+        ("1h",  "1 hour"),
+        ("6h",  "6 hours"),
+    ]
+
+    console.print("\n[bold cyan]═══ Pair Trading — Market Selector ═══[/bold cyan]\n")
+
+    # Pick crypto
+    console.print("[bold]Select crypto:[/bold]")
+    for i, (_, sym, name) in enumerate(_CRYPTO_MENU, 1):
+        console.print(f"  [cyan]{i}[/cyan] — {sym} ({name})")
+    console.print()
+    c = IntPrompt.ask("Crypto", default=1)
+    c = max(1, min(c, len(_CRYPTO_MENU)))
+    asset_key = _CRYPTO_MENU[c - 1][0]
+
+    # Pick timeframe
+    console.print(f"\n[bold]Select timeframe for {_CRYPTO_MENU[c - 1][1]}:[/bold]")
+    for i, (_, label) in enumerate(_TF_MENU, 1):
+        console.print(f"  [cyan]{i}[/cyan] — {label}")
+    console.print()
+    t = IntPrompt.ask("Timeframe", default=1)
+    t = max(1, min(t, len(_TF_MENU)))
+    tf_key = _TF_MENU[t - 1][0]
+
+    spec = make_market_spec(asset_key, tf_key)
+    console.print(f"\n[green]Selected:[/green] {spec.display_name_long}")
+    console.print(f"[dim]Window: {spec.interval_seconds}s | Panic: {spec.panic_time_seconds}s | Slug: {spec.slug_prefix}-*[/dim]\n")
+    return spec
+
+
+# ──────────────────────────────────────────────────────────────
 # ENTRY POINT
 # ──────────────────────────────────────────────────────────────
 
@@ -786,7 +842,12 @@ async def main():
     # Pair trading mode
     if args.pairs:
         from execution.pair_runner import PairRunner
-        runner = PairRunner(mode=args.mode)
+        from execution.market_spec import make_market_spec
+        if args.asset and args.timeframe:
+            spec = make_market_spec(args.asset, args.timeframe)
+        else:
+            spec = select_pair_market()
+        runner = PairRunner(mode=args.mode, spec=spec)
         await runner.run()
         return
 

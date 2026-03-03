@@ -390,9 +390,10 @@ class PairTradingEngine:
         else:
             return cfg.value_zone_high  # No opposite leg yet: static fallback
 
-        # Breakeven: leg1_avg + leg2_fill_price(incl fee) = 1.00
-        # Approximate fee ~1.5% at mid-range prices
-        target_leg2 = 1.00 - avg_leg1 - 0.015
+        # Breakeven: leg1_avg + leg2_ask * (1 + fee) <= 0.99
+        # Dynamic fee at estimated Leg 2 price, plus 1 cent safety buffer
+        est_leg2_price = 1.00 - avg_leg1
+        target_leg2 = 0.99 - avg_leg1 - polymarket_taker_fee(est_leg2_price) * est_leg2_price
         # Hard ceiling: never buy Leg 2 above $0.65 (adverse selection)
         # Floor: never below sniper threshold
         return max(cfg.sniper_threshold, min(target_leg2, 0.65))
@@ -520,10 +521,17 @@ class PairTradingEngine:
 
             fee_rate = polymarket_taker_fee(ask_price)
             check_fill = ask_price * (1.0 + fee_rate)
-            max_hedge_price = 1.00 - avg_first_leg
+            # $0.99 ceiling (1 cent safety margin against slippage)
+            # minus Leg 1 avg cost, minus projected Leg 2 fee
+            max_hedge_price = 0.99 - avg_first_leg - polymarket_taker_fee(ask_price) * ask_price
 
             if check_fill >= max_hedge_price:
-                # Guaranteed loss: prefer gamble EV over completed pair at loss
+                logger.warning(
+                    f"[RISK MANAGER] Hedge Aborted: Leg2 ${ask_price:.4f} + "
+                    f"fee {fee_rate*100:.2f}% (fill ${check_fill:.4f}) exceeds "
+                    f"max ${max_hedge_price:.4f} (Leg1 avg ${avg_first_leg:.4f}). "
+                    f"Holding directional gamble instead."
+                )
                 self._filter("dynamic_breakeven_abort")
                 return None
 

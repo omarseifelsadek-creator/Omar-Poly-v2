@@ -1,0 +1,17 @@
+timestamp,market,token,action,size,price,stop_loss,take_profit,reason,signal_type,pnl,mode,type
+2026-03-03 18:41:55,Will Atletico Madrid win the 2025–26 La Liga?,YES,BUY,1946,0.0061,0.0042,0.0091,Entry: imbalance (74%),imbalance,,PAPER,ENTRY
+2026-03-03 18:43:12,Will Atletico Madrid win the 2025–26 La Liga?,YES,BUY,1946,0.0061,0.0042,0.0091,Entry: imbalance (74%),imbalance,,PAPER,ENTRY
+2026-03-03 18:44:02,Will Atletico Madrid win the 2025–26 La Liga?,YES,BUY,1946,0.0061,0.0042,0.0091,Entry: imbalance (74%),imbalance,,PAPER,ENTRY
+2026-03-03 18:54:08,Will Atletico Madrid win the 2025–26 La Liga?,YES,SELL,1946,0.0049,,,Exit: Max hold (300s) (PnL: $-2.17),,-2.1733,PAPER,EXIT
+2026-03-03 18:54:08,Will Atletico Madrid win the 2025–26 La Liga?,YES,SELL,1946,0.0049,,,Exit: Max hold (300s) (PnL: $-2.17),,-2.1733,PAPER,EXIT
+2026-03-03 18:54:08,Will Atletico Madrid win the 2025–26 La Liga?,YES,SELL,1946,0.0049,,,Exit: Max hold (300s) (PnL: $-2.17),,-2.1733,PAPER,EXIT
+2026-03-03 18:54:08,Will Atletico Madrid win the 2025–26 La Liga?,YES,BUY,1946,0.0061,0.0042,0.0091,Entry: imbalance (74%),imbalance,,PAPER,ENTRY
+2026-03-03 18:54:53,Will Atletico Madrid win the 2025–26 La Liga?,YES,BUY,1946,0.0061,0.0042,0.0091,Entry: imbalance (74%),imbalance,,PAPER,ENTRY
+2026-03-03 19:19:36,Will Atletico Madrid win the 2025–26 La Liga?,YES,SELL,1946,0.0049,,,Exit: Max hold (300s) (PnL: $-2.17),,-2.1733,PAPER,EXIT
+2026-03-03 19:19:36,Will Atletico Madrid win the 2025–26 La Liga?,YES,SELL,1946,0.0049,,,Exit: Max hold (300s) (PnL: $-2.17),,-2.1733,PAPER,EXIT
+2026-03-03 19:29:00,Will Atletico Madrid win the 2025–26 La Liga?,YES,BUY,1946,0.0061,0.0042,0.0091,Entry: imbalance (74%),imbalance,,PAPER,ENTRY
+2026-03-03 19:29:58,Will Atletico Madrid win the 2025–26 La Liga?,YES,BUY,1946,0.0061,0.0042,0.0091,Entry: imbalance (74%),imbalance,,PAPER,ENTRY
+2026-03-03 19:35:46,Will Atletico Madrid win the 2025–26 La Liga?,YES,SELL,1946,0.0049,,,Exit: Max hold (300s) (PnL: $-2.17),,-2.1733,PAPER,EXIT
+2026-03-03 19:35:46,Will Atletico Madrid win the 2025–26 La Liga?,YES,SELL,1946,0.0049,,,Exit: Max hold (300s) (PnL: $-2.17),,-2.1733,PAPER,EXIT
+2026-03-03 19:35:46,Will Atletico Madrid win the 2025–26 La Liga?,YES,BUY,1946,0.0061,0.0042,0.0091,Entry: imbalance (74%),imbalance,,PAPER,ENTRY
+2026-03-03 21:06:00,Will Atletico Madrid win the 2025–26 La Liga?,,SESSION_END,,,,,Trades: 7 | W: 0 L: 7 | WR: 0% | PnL: $-15.21,,-15.2131,PAPER,SUMMARY

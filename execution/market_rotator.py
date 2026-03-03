@@ -1,17 +1,21 @@
 """
-market_rotator.py — Auto-rotating market finder for BTC 5-minute markets.
+market_rotator.py — Auto-rotating market finder for crypto Up/Down markets.
 
-Computes the current 5-minute window from UTC time, generates the
-event slug, fetches token IDs from Gamma API, and signals when
-it's time to rotate to the next window.
+Computes the current window from UTC time, generates the event slug,
+fetches token IDs from Gamma API, and signals when it's time to rotate
+to the next window.
 
-SLUG FORMAT: btc-updown-5m-{unix_timestamp}
-The timestamp is the START of each 5-minute window, rounded down
-to the nearest 300-second boundary.
+Supports multiple assets (BTC, ETH, SOL) and timeframes (5m, 15m, 1h, 6h)
+via the MarketSpec configuration object.
 
-Example:
+SLUG FORMAT: {asset}-updown-{timeframe}-{unix_timestamp}
+The timestamp is the START of each window, rounded down to the interval boundary.
+
+Example (BTC 5m):
   UTC 03:10:00 → btc-updown-5m-1740798600  (window 03:10-03:15)
-  UTC 03:15:00 → btc-updown-5m-1740798900  (window 03:15-03:20)
+
+Example (ETH 1h):
+  UTC 14:00:00 → eth-updown-1h-1740837600  (window 14:00-15:00)
 """
 
 import time
@@ -23,31 +27,36 @@ from dataclasses import dataclass
 
 import httpx
 
+from execution.market_spec import MarketSpec, make_market_spec
+
 logger = logging.getLogger(__name__)
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
 BINANCE_API = "https://api.binance.com/api/v3"
-INTERVAL = 300  # 5 minutes in seconds
+
+# Default spec for backward compatibility
+_DEFAULT_SPEC = make_market_spec("btc", "5m")
 
 
-async def fetch_btc_resolution(start_ts: int, end_ts: int) -> Optional[str]:
+async def fetch_price_resolution(
+    start_ts: int, end_ts: int, spec: MarketSpec = _DEFAULT_SPEC
+) -> Optional[str]:
     """
-    Determine BTC Up/Down winner by checking the actual BTC price.
+    Determine Up/Down winner by checking the actual price on Binance.
 
-    Queries Binance for the 5-min candle covering [start_ts, end_ts].
-    If BTC closed higher than it opened → YES (Up), otherwise → NO (Down).
+    Queries Binance for the candle covering [start_ts, end_ts].
+    If close > open → YES (Up), otherwise → NO (Down).
 
-    This is instant (single HTTP call) and doesn't depend on Polymarket's
-    slow resolution pipeline.
+    Works for any asset/timeframe via the MarketSpec.
     """
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{BINANCE_API}/klines",
                 params={
-                    "symbol": "BTCUSDT",
-                    "interval": "5m",
+                    "symbol": spec.binance_symbol,
+                    "interval": spec.binance_interval,
                     "startTime": start_ts * 1000,
                     "endTime": end_ts * 1000,
                     "limit": 1,
@@ -58,7 +67,7 @@ async def fetch_btc_resolution(start_ts: int, end_ts: int) -> Optional[str]:
             candles = resp.json()
 
             if not candles:
-                logger.warning("BTC resolution: no candle data returned")
+                logger.warning(f"{spec.display_name} resolution: no candle data returned")
                 return None
 
             candle = candles[0]
@@ -71,20 +80,25 @@ async def fetch_btc_resolution(start_ts: int, end_ts: int) -> Optional[str]:
                 winner = "NO"
 
             logger.warning(
-                f"BTC resolution: {winner} | "
+                f"{spec.display_name} resolution: {winner} | "
                 f"Open=${open_price:.2f} Close=${close_price:.2f} "
                 f"Δ=${close_price - open_price:+.2f}"
             )
             return winner
 
     except Exception as e:
-        logger.warning(f"BTC resolution failed: {e}")
+        logger.warning(f"{spec.display_name} resolution failed: {e}")
         return None
+
+
+# Keep old name as alias for backward compatibility
+async def fetch_btc_resolution(start_ts: int, end_ts: int) -> Optional[str]:
+    return await fetch_price_resolution(start_ts, end_ts, _DEFAULT_SPEC)
 
 
 @dataclass
 class MarketWindow:
-    """A single 5-minute BTC Up/Down market window."""
+    """A single crypto Up/Down market window."""
     slug: str
     event_slug: str
     start_ts: int           # Unix timestamp of window start
@@ -109,15 +123,15 @@ class MarketWindow:
         return f"{start}-{end} UTC"
 
 
-def _current_window_start() -> int:
-    """Get the unix timestamp of the current 5-minute window start."""
+def _current_window_start(interval: int) -> int:
+    """Get the unix timestamp of the current window start."""
     now = int(time.time())
-    return now - (now % INTERVAL)
+    return now - (now % interval)
 
 
-def _next_window_start() -> int:
-    """Get the unix timestamp of the next 5-minute window start."""
-    return _current_window_start() + INTERVAL
+def _next_window_start(interval: int) -> int:
+    """Get the unix timestamp of the next window start."""
+    return _current_window_start(interval) + interval
 
 
 def _resolve_token_order(market: dict, token_ids: list) -> tuple:
@@ -160,55 +174,60 @@ def _resolve_token_order(market: dict, token_ids: list) -> tuple:
     return (0, 1)
 
 
-def _parse_end_date(end_date_str: Optional[str], window_start: int) -> int:
+def _parse_end_date(
+    end_date_str: Optional[str], window_start: int, interval: int
+) -> int:
     """
     Parse the endDate from Gamma API into a unix timestamp.
-    Falls back to window_start + INTERVAL if parsing fails.
+    Falls back to window_start + interval if parsing fails.
 
     IMPORTANT: The Gamma API endDate can be the EVENT-level end date
-    (hours/days away), not the 5-minute WINDOW end date. We validate
-    that the parsed end is within a reasonable range (2-10 minutes from
-    window_start). If not, we fall back to the computed end.
+    (hours/days away), not the WINDOW end date. We validate that the
+    parsed end is within a reasonable range. If not, we fall back.
 
     endDate format: "2026-03-01T14:00:00Z" (ISO 8601)
     """
+    min_delta = int(interval * 0.4)
+    max_delta = int(interval * 2.0)
+
     if end_date_str:
         try:
             from datetime import datetime, timezone
-            # Handle various ISO formats
             clean = end_date_str.replace("Z", "+00:00")
             dt = datetime.fromisoformat(clean)
             parsed_ts = int(dt.timestamp())
 
-            # Validate: end should be 2-10 minutes after window start
             delta = parsed_ts - window_start
-            if 120 <= delta <= 600:
+            if min_delta <= delta <= max_delta:
                 return parsed_ts
             else:
                 logger.warning(
                     f"endDate {end_date_str} is {delta}s from window start "
-                    f"(expected ~300s) — using computed end instead"
+                    f"(expected ~{interval}s) — using computed end instead"
                 )
         except (ValueError, TypeError) as e:
             logger.warning(f"Could not parse endDate '{end_date_str}': {e}")
 
-    # Fallback: computed from window start (always correct for 5-min windows)
-    return window_start + INTERVAL
+    return window_start + interval
 
 
 async def fetch_market_window(
     client: httpx.AsyncClient,
     window_start: Optional[int] = None,
+    spec: MarketSpec = _DEFAULT_SPEC,
 ) -> Optional[MarketWindow]:
     """
-    Fetch market data for a specific 5-minute BTC window.
+    Fetch market data for a specific window.
 
-    If window_start is None, uses the current window.
+    If window_start is None, uses the current window for the given spec.
     """
-    if window_start is None:
-        window_start = _current_window_start()
+    interval = spec.interval_seconds
 
-    event_slug = f"btc-updown-5m-{window_start}"
+    if window_start is None:
+        window_start = _current_window_start(interval)
+
+    event_slug = f"{spec.slug_prefix}-{window_start}"
+    fallback_question = f"{spec.display_name_long} {time.strftime('%H:%M', time.gmtime(window_start))}"
 
     try:
         # Try events endpoint first (contains nested markets)
@@ -232,11 +251,9 @@ async def fetch_market_window(
                 else:
                     token_ids = token_ids_raw
 
-                # Use actual endDate from API if available
-                end_ts = _parse_end_date(market.get("endDate"), window_start)
+                end_ts = _parse_end_date(market.get("endDate"), window_start, interval)
 
                 if len(token_ids) >= 2:
-                    # Determine which token is Up vs Down from outcomes
                     up_idx, down_idx = _resolve_token_order(market, token_ids)
 
                     return MarketWindow(
@@ -244,7 +261,7 @@ async def fetch_market_window(
                         event_slug=event_slug,
                         start_ts=window_start,
                         end_ts=end_ts,
-                        question=market.get("question", f"BTC Up or Down {time.strftime('%H:%M', time.gmtime(window_start))}"),
+                        question=market.get("question", fallback_question),
                         up_token_id=token_ids[up_idx],
                         down_token_id=token_ids[down_idx],
                         market_id=str(market.get("id", "")),
@@ -270,7 +287,7 @@ async def fetch_market_window(
             else:
                 token_ids = token_ids_raw
 
-            end_ts = _parse_end_date(market.get("endDate"), window_start)
+            end_ts = _parse_end_date(market.get("endDate"), window_start, interval)
 
             if len(token_ids) >= 2:
                 up_idx, down_idx = _resolve_token_order(market, token_ids)
@@ -280,7 +297,7 @@ async def fetch_market_window(
                     event_slug=event_slug,
                     start_ts=window_start,
                     end_ts=end_ts,
-                    question=market.get("question", f"BTC Up or Down 5m"),
+                    question=market.get("question", fallback_question),
                     up_token_id=token_ids[up_idx],
                     down_token_id=token_ids[down_idx],
                     market_id=str(market.get("id", "")),
@@ -296,24 +313,28 @@ async def fetch_market_window(
 
 class MarketRotator:
     """
-    Manages auto-rotation between 5-minute BTC Up/Down markets.
+    Manages auto-rotation between crypto Up/Down market windows.
+
+    Supports any asset + timeframe via MarketSpec.
 
     Usage:
-        rotator = MarketRotator()
+        from execution.market_spec import make_market_spec
+        spec = make_market_spec("eth", "1h")
+        rotator = MarketRotator(spec=spec)
         await rotator.start()
 
-        # Check periodically
         if rotator.should_rotate():
             new_window = await rotator.rotate()
-            # Reconnect WebSocket to new_window.up_token_id
     """
 
-    def __init__(self, token_side: str = "auto"):
+    def __init__(self, spec: MarketSpec = _DEFAULT_SPEC, token_side: str = "auto"):
         """
         Args:
+            spec: MarketSpec defining asset, timeframe, and all derived constants
             token_side: "auto" picks whichever side is closer to 50%,
                         "up" always watches Up, "down" always watches Down
         """
+        self.spec = spec
         self.token_side_pref = token_side.lower()
         self.token_side = "up"  # Active side (updated each rotation)
         self.current_window: Optional[MarketWindow] = None
@@ -327,7 +348,6 @@ class MarketRotator:
             return
 
         try:
-            # Get midpoint for UP token
             resp = await self._client.get(
                 f"{CLOB_API}/midpoint",
                 params={"token_id": window.up_token_id},
@@ -336,14 +356,11 @@ class MarketRotator:
             resp.raise_for_status()
             up_mid = float(resp.json().get("mid", 0.5))
 
-            # Pick whichever is closer to 0.50
             if abs(up_mid - 0.5) <= 0.5:
-                # UP is closer to 50% or equal — watch UP
                 self.token_side = "up" if up_mid >= 0.3 else "down"
             else:
                 self.token_side = "down"
 
-            # If either side is extreme (<15% or >85%), watch the other
             if up_mid < 0.15:
                 self.token_side = "down"
             elif up_mid > 0.85:
@@ -357,7 +374,7 @@ class MarketRotator:
     async def start(self) -> Optional[MarketWindow]:
         """Initialize and fetch the current market window."""
         self._client = httpx.AsyncClient(timeout=10.0)
-        window = await fetch_market_window(self._client)
+        window = await fetch_market_window(self._client, spec=self.spec)
         if window:
             self.current_window = window
             await self._pick_best_side(window)
@@ -373,11 +390,13 @@ class MarketRotator:
         """Check if we need to switch to the next window."""
         if not self.current_window:
             return True
-        # Rotate 10 seconds before expiry to get set up for next window
-        return self.current_window.seconds_remaining <= 10
+        return self.current_window.seconds_remaining <= self.spec.rotation_early_seconds
 
     async def rotate(self) -> Optional[MarketWindow]:
         """Fetch the next window and switch to it."""
+        interval = self.spec.interval_seconds
+        skip_threshold = self.spec.window_skip_threshold_s
+
         # Use a fresh client to avoid stale connections / rate limit state
         if self._client:
             try:
@@ -387,27 +406,26 @@ class MarketRotator:
         self._client = httpx.AsyncClient(timeout=10.0)
 
         # Try CURRENT window first — after settlement we're usually
-        # already inside the next 5-min block with time left to trade
-        current_start = _current_window_start()
+        # already inside the next block with time left to trade
+        current_start = _current_window_start(interval)
         prev_start = self.current_window.start_ts if self.current_window else 0
         window = None
 
         if current_start != prev_start:
-            window = await fetch_market_window(self._client, current_start)
-            # Skip if too little time left (<60s)
-            if window and window.seconds_remaining < 60:
+            window = await fetch_market_window(self._client, current_start, self.spec)
+            if window and window.seconds_remaining < skip_threshold:
                 logger.info(f"Current window has {window.seconds_remaining:.0f}s left, skipping to next")
                 window = None
 
         # Current window unavailable or too short — try next
         if not window:
-            next_start = _next_window_start()
-            window = await fetch_market_window(self._client, next_start)
+            next_start = _next_window_start(interval)
+            window = await fetch_market_window(self._client, next_start, self.spec)
 
         if not window:
             # Sometimes the slug is off by one interval — try adjacent
-            next_start = _next_window_start()
-            window = await fetch_market_window(self._client, next_start + INTERVAL)
+            next_start = _next_window_start(interval)
+            window = await fetch_market_window(self._client, next_start + interval, self.spec)
 
         if window:
             self.current_window = window
@@ -449,7 +467,7 @@ async def fetch_market_resolution(
     poll_interval: float = 3.0,
 ) -> Optional[str]:
     """
-    Poll the Gamma API for the actual resolution of a BTC 5-min market.
+    Poll the Gamma API for the actual resolution of a market.
 
     Polymarket resolves markets shortly after the window closes (typically
     5-30 seconds). This function polls until it gets a definitive answer.
@@ -465,12 +483,11 @@ async def fetch_market_resolution(
         "YES" or "NO" if resolved, None if timed out
     """
     start = time.time()
-    last_debug = {}  # Track what API returns for timeout logging
+    last_debug = {}
 
     async with httpx.AsyncClient() as client:
         while (time.time() - start) < max_wait:
             try:
-                # Try the events endpoint
                 resp = await client.get(
                     f"{GAMMA_API}/events",
                     params={"slug": market_slug},
@@ -484,7 +501,6 @@ async def fetch_market_resolution(
                     markets = event.get("markets", [])
 
                     for market in markets:
-                        # Check for explicit resolution fields
                         outcome = market.get("outcome")
                         resolved = market.get("resolved", False)
                         winner = market.get("winner")
@@ -507,7 +523,6 @@ async def fetch_market_resolution(
                             return "NO"
 
                         # Method 2: check token prices after resolution
-                        # Resolved markets show winning token at ~$1.00
                         if resolved:
                             tokens = market.get("tokens", [])
                             if isinstance(tokens, list):
@@ -540,7 +555,7 @@ async def fetch_market_resolution(
                                     logger.info(f"Resolution: NO (outcomePrices down={p_down})")
                                     return "NO"
 
-                        # Method 4: check clobTokenPrices (CLOB final prices)
+                        # Method 4: check clobTokenPrices
                         clob_prices = market.get("clobTokenPrices")
                         if clob_prices:
                             if isinstance(clob_prices, str):
