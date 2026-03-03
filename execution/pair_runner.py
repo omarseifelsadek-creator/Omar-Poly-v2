@@ -40,6 +40,92 @@ from execution.market_rotator import (
 logger = logging.getLogger(__name__)
 console = Console()
 
+CHAINLINK_WS = "wss://ws-live-data.polymarket.com"
+
+
+class ChainlinkTracker:
+    """Track BTC/USD price from Polymarket's Chainlink data stream."""
+
+    def __init__(self):
+        self.latest_price: Optional[float] = None
+        self.latest_ts: float = 0.0
+        self.window_open_price: Optional[float] = None
+        self._running = False
+        self._task: Optional[asyncio.Task] = None
+
+    def start(self):
+        """Launch the background WebSocket listener."""
+        self._running = True
+        self._task = asyncio.create_task(self._ws_loop())
+
+    def stop(self):
+        """Stop the background listener."""
+        self._running = False
+        if self._task and not self._task.done():
+            self._task.cancel()
+
+    def snapshot_open(self):
+        """Record the current price as window open."""
+        self.window_open_price = self.latest_price
+        if self.latest_price:
+            logger.info(f"[CHAINLINK] Window open price: ${self.latest_price:,.2f}")
+
+    def resolve(self) -> Optional[str]:
+        """Determine winner from open vs current price."""
+        if self.window_open_price is None or self.latest_price is None:
+            return None
+        if self.latest_price > self.window_open_price:
+            winner = "YES"
+        elif self.latest_price < self.window_open_price:
+            winner = "NO"
+        else:
+            winner = "NO"  # "Up" requires strictly greater
+        logger.warning(
+            f"[CHAINLINK] Resolution: {winner} | "
+            f"Open=${self.window_open_price:,.2f} "
+            f"Close=${self.latest_price:,.2f} "
+            f"Δ=${self.latest_price - self.window_open_price:+,.2f}"
+        )
+        return winner
+
+    async def _ws_loop(self):
+        """Connect to Polymarket Chainlink stream and track BTC/USD."""
+        while self._running:
+            try:
+                async with websockets.connect(
+                    CHAINLINK_WS, ping_interval=30, ping_timeout=10,
+                ) as ws:
+                    # Subscribe to Chainlink BTC/USD
+                    await ws.send(json.dumps({
+                        "action": "subscribe",
+                        "subscriptions": [{
+                            "topic": "crypto_prices_chainlink",
+                            "type": "*",
+                            "filters": '{"symbol":"btc/usd"}',
+                        }],
+                    }))
+                    logger.info("[CHAINLINK] Subscribed to BTC/USD price stream")
+
+                    async for raw in ws:
+                        if not self._running:
+                            break
+                        try:
+                            msg = json.loads(raw)
+                            payload = msg.get("payload", {})
+                            price = payload.get("value")
+                            if price is not None:
+                                self.latest_price = float(price)
+                                self.latest_ts = time.time()
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                if self._running:
+                    logger.warning(f"[CHAINLINK] WS error: {e}, reconnecting in 3s...")
+                    await asyncio.sleep(3)
+
 
 class PairRunner:
     """
@@ -112,6 +198,9 @@ class PairRunner:
         # Live fill tracking — confirmed CLOB fills for current window
         self._live_fills: list[dict] = []
 
+        # Chainlink BTC/USD price tracker — same source as Polymarket resolution
+        self._chainlink = ChainlinkTracker()
+
         # Graceful stop: set by Ctrl+C, checked after window settlement
         self._stop_requested: bool = False
 
@@ -130,6 +219,9 @@ class PairRunner:
                     "\n[bold yellow]⚠  Stop requested — finishing current window then exiting...[/bold yellow]"
                 )
         signal.signal(signal.SIGINT, _request_stop)
+
+        # Start Chainlink BTC/USD price stream (runs alongside order book WS)
+        self._chainlink.start()
 
         rotator = MarketRotator(token_side="auto")
         window = await rotator.start()
@@ -176,6 +268,9 @@ class PairRunner:
             self._zone_counts = {"Sniper": 0, "Value": 0, "Panic": 0}
             self._slippages = []
 
+            # Snapshot Chainlink BTC price at window open
+            self._chainlink.snapshot_open()
+
             # Run this window
             try:
                 await self._run_window()
@@ -195,6 +290,7 @@ class PairRunner:
 
             # Graceful stop: Ctrl+C was pressed — exit after settlement
             if self._stop_requested:
+                self._chainlink.stop()
                 console.print("[bold yellow]  Graceful stop complete. Exiting.[/bold yellow]")
                 break
 
@@ -755,20 +851,27 @@ class PairRunner:
 
         winner = None
 
-        # Method 1: BTC price check — instant and accurate
-        if self.window:
+        # Method 1: Chainlink BTC/USD — exact same source as Polymarket resolution
+        if self._chainlink.latest_price and self._chainlink.window_open_price:
+            winner = self._chainlink.resolve()
+            if winner:
+                console.print(f"[green]  Resolution from Chainlink: {winner} won[/green]")
+
+        # Method 2: Binance BTC candle (fallback if Chainlink stream disconnected)
+        if winner is None and self.window:
+            console.print("[yellow]  Chainlink unavailable, checking Binance...[/yellow]")
             try:
                 winner = await fetch_btc_resolution(
                     self.window.start_ts, self.window.end_ts,
                 )
                 if winner:
-                    console.print(f"[green]  Resolution from BTC price: {winner} won[/green]")
+                    console.print(f"[green]  Resolution from Binance: {winner} won[/green]")
             except Exception as e:
-                logger.warning(f"BTC resolution error: {e}")
+                logger.warning(f"Binance resolution error: {e}")
 
-        # Method 2: Poll the Gamma API (fallback if Binance fails)
+        # Method 3: Poll the Gamma API (last resort)
         if winner is None and self.window:
-            console.print("[yellow]  BTC price unavailable, polling Gamma API...[/yellow]")
+            console.print("[yellow]  Price feeds unavailable, polling Gamma API...[/yellow]")
             try:
                 winner = await fetch_market_resolution(
                     market_slug=self.window.event_slug,
@@ -778,19 +881,19 @@ class PairRunner:
                     poll_interval=5.0,
                 )
                 if winner:
-                    console.print(f"[green]  Resolution from API: {winner} won[/green]")
+                    console.print(f"[green]  Resolution from Gamma API: {winner} won[/green]")
             except Exception as e:
                 logger.error(f"Resolution fetch error: {e}")
 
-        # Method 3: Fallback to order book snapshot (last resort)
+        # Method 4: Fallback to order book snapshot (emergency only)
         if winner is None:
             yes_mid = self.yes_book.midpoint
             yes_ask = self.yes_book.best_ask
             no_ask = self.no_book.best_ask
             winner = self.engine.determine_winner(yes_mid, yes_ask)
             console.print(
-                f"[yellow]  All resolution methods failed — guessing from book: "
-                f"{winner} (YES mid={yes_mid}, ask={yes_ask}, NO ask={no_ask})[/yellow]"
+                f"[red]  WARNING: All resolution methods failed — guessing from book: "
+                f"{winner} (YES mid={yes_mid}, ask={yes_ask}, NO ask={no_ask})[/red]"
             )
 
         # Run settlement — always settle the paper engine to keep it clean
