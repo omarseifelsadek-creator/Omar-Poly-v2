@@ -154,27 +154,37 @@ class PairConfig:
 
     buy_size_usd: float = 10.0
     max_position_usd: float = 100.0
-    panic_max_position_usd: float = 116.0  # Extended cap during panic hedge
+    panic_max_position_usd: float = 116.0
 
-    max_skew_pct: float = 0.20
+    max_skew_pct: float = 0.50             # Gemini #3: 50% single-side skew cap
     min_first_leg_price: float = 0.15
+    panic_hedge_pair_limit: float = 0.97  # Backtest-optimized: cap pair cost even on panic hedges
 
-    # ── PRICE ZONES (EV-optimized) ──
+    # ── PRICE ZONES ──
     # Sniper Zone: ≤ $0.35 — ignore all signals, buy aggressively
-    # Value Zone:  $0.36–$0.44 — buy with signal filters
-    # Dead Zone:   > $0.44 — DO NOTHING (no maker orders, toxic flow trap)
-    # Exception:   Panic mode completing a pair overrides everything
+    # Value Zone:  $0.36–dynamic — buy with signal filters
+    # Dead Zone:   > dynamic — blocked (replaced by dynamic breakeven)
     sniper_threshold: float = 0.35       # At or below = sniper (no signal filter)
-    value_zone_high: float = 0.44        # Above this = dead zone (do nothing)
+    value_zone_high: float = 0.43        # Static fallback; overridden by dynamic_dead_zone when Leg 1 exists
 
-    # Signal filters (only apply in Value Zone $0.36-$0.44)
+    # Signal filters (only apply in Value Zone)
     obi_delay_threshold: float = 0.75
     flow_delay_threshold: float = 0.6
 
     # Signal override: don't apply sniper override too close to expiry
     sniper_signal_min_time: float = 90.0  # Only override signals if >90s left
 
-    panic_time_seconds: float = 30.0
+    panic_time_seconds: float = 10.0      # Backtest-optimized: was 30.0
+
+    # ── THETA-BASED POSITION SIZING (Gemini #3) ──
+    # Linear decay: 100% at 0-3min, 50% at 3-4.5min, 0% new opens at 4.5-5min
+    theta_full_size_until_s: float = 180.0   # 3:00 — 100% size
+    theta_half_size_until_s: float = 30.0    # last 30s — hedge only (0% new opens)
+    # Note: between theta_full_size_until_s and theta_half_size_until_s = 50% size
+
+    # ── ATOMIC ENTRY (Gemini #2) ──
+    # Only open Leg 1 if opposite book liquidity allows pair cost < target
+    atomic_entry_max_pair: float = 0.95  # max projected pair cost to allow Leg 1
 
     # ── BLOCKCHAIN CLOB EXECUTION ──
     min_buy_cooldown_s: float = 2.0       # Polygon block time
@@ -347,6 +357,46 @@ class PairTradingEngine:
     # CORE DECISION
     # ──────────────────────────────────────────────────────
 
+    def _theta_size_multiplier(self) -> float:
+        """
+        Gemini #3: Theta-based position sizing.
+        Returns multiplier: 1.0 (full), 0.5 (half), 0.0 (hedge-only).
+        """
+        t = self.time_remaining
+        cfg = self.config
+        if t > cfg.theta_full_size_until_s:
+            return 1.0   # Plenty of time: full size
+        elif t > cfg.theta_half_size_until_s:
+            return 0.5   # Winding down: half size
+        else:
+            return 0.0   # Last 30s: hedge-only, no new opens
+
+    def _dynamic_dead_zone(self, side: str) -> float:
+        """
+        Gemini #4: Dynamic dead zone based on first leg's average cost.
+        Returns the max ask price for the second leg (Leg 2).
+        If no opposite leg exists, returns the static fallback.
+
+        When Leg 1 is cheap ($0.35), Leg 2 can go up to ~$0.63.
+        When Leg 1 is expensive ($0.45), Leg 2 is capped at ~$0.53.
+        Hard ceiling at $0.65 to avoid adverse selection regardless.
+        """
+        cfg = self.config
+        # Determine opposite leg avg cost
+        if side == "YES" and self.no_qty > 0:
+            avg_leg1 = self.no_avg
+        elif side == "NO" and self.yes_qty > 0:
+            avg_leg1 = self.yes_avg
+        else:
+            return cfg.value_zone_high  # No opposite leg yet: static fallback
+
+        # Breakeven: leg1_avg + leg2_fill_price(incl fee) = 1.00
+        # Approximate fee ~1.5% at mid-range prices
+        target_leg2 = 1.00 - avg_leg1 - 0.015
+        # Hard ceiling: never buy Leg 2 above $0.65 (adverse selection)
+        # Floor: never below sniper threshold
+        return max(cfg.sniper_threshold, min(target_leg2, 0.65))
+
     def evaluate(
         self,
         yes_ask: Optional[float],
@@ -376,12 +426,14 @@ class PairTradingEngine:
 
         yes_action = self._evaluate_side(
             "YES", yes_ask, yes_bid, yes_ask_levels, yes_bid_depth,
-            obi, flow_pressure, has_sweep, sweep_side
+            obi, flow_pressure, has_sweep, sweep_side,
+            opposite_ask=no_ask,
         ) if yes_ask else None
 
         no_action = self._evaluate_side(
             "NO", no_ask, no_bid, no_ask_levels, no_bid_depth,
-            1.0 - obi, -flow_pressure, has_sweep, sweep_side
+            1.0 - obi, -flow_pressure, has_sweep, sweep_side,
+            opposite_ask=yes_ask,
         ) if no_ask else None
 
         if yes_action and no_action:
@@ -401,29 +453,34 @@ class PairTradingEngine:
         ask_levels: Optional[list], bid_depth: float,
         obi_for_side: float, flow_for_side: float,
         has_sweep: bool, sweep_side: str,
+        opposite_ask: Optional[float] = None,
     ) -> Optional[dict]:
         """
-        Evaluate one side with EV-optimized gate logic.
+        Evaluate one side with full gate logic.
 
-        3 EV FIXES:
-        #1 Panic hedge: uncapped pair cost. Only constraint: fill < $1.00.
-        #2 Sniper signal override: <= $0.35 + >90s -> ignore OBI/flow.
-        #3 Nuked dead zone: > $0.44 -> DO NOTHING.
+        GATES:
+        #1 Capital limit
+        #2 Inventory lock (skew)
+        #3 Anti-falling knife
+        #4 Theta: hedge-only window (no new opens in last 30s)
+        #5 Panic hedge with dynamic breakeven (Gemini #1)
+        #6 Atomic entry: Leg 1 only if Leg 2 liquidity exists (Gemini #2)
+        #7 Dynamic dead zone (Gemini #4) / Signal filters
+        #8 Latency + VWAP + pair cost check
         """
         cfg = self.config
 
-        # Gate 1: Capital limit
-        # Normal: $100 hard cap. Panic hedge: extended to $116 to complete pairs.
-        cap = cfg.max_position_usd
-        if self.in_panic_mode:
-            # Check if this side would complete a pair
-            would_complete = (
-                (side == "YES" and self.no_qty > 0 and self.yes_qty < self.no_qty) or
-                (side == "NO" and self.yes_qty > 0 and self.no_qty < self.yes_qty)
-            )
-            if would_complete:
-                cap = cfg.panic_max_position_usd
+        is_first_leg = (self.yes_qty == 0 and self.no_qty == 0)
+        is_completing_pair = (
+            (side == "YES" and self.no_qty > 0 and self.yes_qty < self.no_qty) or
+            (side == "NO" and self.yes_qty > 0 and self.no_qty < self.yes_qty)
+        )
+        is_opening_new = not is_completing_pair
 
+        # Gate 1: Capital limit
+        cap = cfg.max_position_usd
+        if self.in_panic_mode and is_completing_pair:
+            cap = cfg.panic_max_position_usd
         if self.total_capital >= cap:
             self._filter("capital_limit")
             return None
@@ -437,12 +494,6 @@ class PairTradingEngine:
             return None
 
         # Gate 3: Anti-Falling Knife
-        is_first_leg = (self.yes_qty == 0 and self.no_qty == 0)
-        is_completing_pair = (
-            (side == "YES" and self.no_qty > 0 and self.yes_qty < self.no_qty) or
-            (side == "NO" and self.yes_qty > 0 and self.no_qty < self.yes_qty)
-        )
-
         if ask_price < cfg.min_first_leg_price and is_first_leg:
             self._filter("falling_knife_first_leg")
             return None
@@ -450,35 +501,66 @@ class PairTradingEngine:
             self._filter("falling_knife_not_completing")
             return None
 
-        # Gate 4: PANIC HEDGE (EV Fix #1)
-        # Panic + completing: DISABLE pair cost cap. Only require fill < $1.00.
-        # -$0.20 completed pair >>> -$0.40 unhedged leg going to zero.
+        # Gate 4: THETA POSITION SIZING (Gemini #3)
+        # In the hedge-only window (last 30s), block all new opens
+        theta = self._theta_size_multiplier()
+        if theta <= 0.0 and is_opening_new:
+            self._filter("theta_hedge_only")
+            return None
+
+        # Gate 5: PANIC HEDGE with DYNAMIC BREAKEVEN (Gemini #1)
         panic_hedge = (self.in_panic_mode and is_completing_pair)
 
         if panic_hedge:
+            # Dynamic breakeven: max_hedge_price = 1.00 - fee - avg_first_leg
+            if side == "YES":
+                avg_first_leg = self.no_avg  # NO is Leg 1
+            else:
+                avg_first_leg = self.yes_avg  # YES is Leg 1
+
             fee_rate = polymarket_taker_fee(ask_price)
             check_fill = ask_price * (1.0 + fee_rate)
-            if check_fill >= 1.00:
-                self._filter("panic_hedge_over_dollar")
+            max_hedge_price = 1.00 - avg_first_leg
+
+            if check_fill >= max_hedge_price:
+                # Guaranteed loss: prefer gamble EV over completed pair at loss
+                self._filter("dynamic_breakeven_abort")
                 return None
+
+            # Also enforce backtest-optimized pair cost limit
+            if cfg.panic_hedge_pair_limit > 0 and self.yes_qty > 0 and self.no_qty > 0:
+                qty_est = int(cfg.buy_size_usd / ask_price) or 1
+                if not self._would_panic_hedge_cost_ok(side, qty_est, check_fill, cfg.panic_hedge_pair_limit):
+                    self._filter("panic_hedge_cost_exceeded")
+                    return None
+
             # SKIP zone/signal gates -> fall through to execution
         else:
-            # Gate 5: NUKED DEAD ZONE (EV Fix #3)
-            # > $0.44 = toxic adverse selection without Binance oracle.
-            if ask_price > cfg.value_zone_high:
-                self._filter("dead_zone_nuked")
+            # Gate 6: ATOMIC ENTRY (Gemini #2)
+            # First leg: only buy if opposite book has liquidity for pair < $0.95
+            if is_first_leg and opposite_ask is not None:
+                fee_this = polymarket_taker_fee(ask_price)
+                fee_opp = polymarket_taker_fee(opposite_ask)
+                projected_pair = (ask_price * (1.0 + fee_this)) + (opposite_ask * (1.0 + fee_opp))
+                if projected_pair > cfg.atomic_entry_max_pair:
+                    self._filter("atomic_entry_too_wide")
+                    return None
+
+            # Gate 7: DYNAMIC DEAD ZONE (Gemini #4)
+            dead_zone_limit = self._dynamic_dead_zone(side)
+            if ask_price > dead_zone_limit:
+                self._filter("dead_zone_dynamic")
                 return None
 
-            # Gate 6: SIGNAL FILTERS (EV Fix #2)
-            in_sniper_zone = ask_price <= cfg.sniper_threshold  # <= $0.35
+            # Gate 8: SIGNAL FILTERS
+            in_sniper_zone = ask_price <= cfg.sniper_threshold
 
             if in_sniper_zone:
-                # Sniper: IGNORE signals if >90s left (crash = opportunity)
                 if self.time_remaining <= cfg.sniper_signal_min_time:
                     self._filter("sniper_too_late")
                     return None
             else:
-                # Value zone ($0.36-$0.44): apply signal filters
+                # Value zone: apply signal filters
                 if obi_for_side > cfg.obi_delay_threshold:
                     self._filter("obi_delay")
                     return None
@@ -503,12 +585,14 @@ class PairTradingEngine:
                 self._filter("latency_race_lost")
                 return None
 
-        # VWAP BOOK WALKING
-        desired_qty = int(cfg.buy_size_usd / ask_price)
+        # THETA-ADJUSTED ORDER SIZE (Gemini #3)
+        effective_size = cfg.buy_size_usd * max(theta, 0.5 if is_completing_pair else theta)
+        desired_qty = int(effective_size / ask_price)
         if desired_qty < 1:
             self._filter("size_too_small")
             return None
 
+        # VWAP BOOK WALKING
         if ask_levels and len(ask_levels) > 0:
             vwap_price, filled_qty, raw_cost, levels_walked = vwap_fill(
                 ask_levels, desired_qty, cfg.max_book_walk_levels
@@ -528,7 +612,7 @@ class PairTradingEngine:
         fee_rate = polymarket_taker_fee(vwap_price)
         fill_price = vwap_price * (1.0 + fee_rate)
 
-        # PAIR COST CHECK (EV Fix #1: skipped for panic hedge)
+        # PAIR COST CHECK
         if panic_hedge:
             if fill_price >= 1.00:
                 self._filter("panic_fill_over_dollar")
@@ -565,6 +649,19 @@ class PairTradingEngine:
         if self.in_panic_mode:
             max_first_leg = 0.65
         return fill_price <= max_first_leg
+
+    def _would_panic_hedge_cost_ok(self, side: str, qty: float,
+                                    fill_price: float, limit: float) -> bool:
+        """Check if a panic hedge would keep pair cost under the hard limit."""
+        new_yes_qty = self.yes_qty + (qty if side == "YES" else 0)
+        new_no_qty = self.no_qty + (qty if side == "NO" else 0)
+        new_yes_cost = self.yes_cost + (fill_price * qty if side == "YES" else 0)
+        new_no_cost = self.no_cost + (fill_price * qty if side == "NO" else 0)
+
+        if new_yes_qty > 0 and new_no_qty > 0:
+            projected = (new_yes_cost / new_yes_qty) + (new_no_cost / new_no_qty)
+            return projected <= limit
+        return True
 
     def _execute_buy(
         self, side: str, qty: float,
