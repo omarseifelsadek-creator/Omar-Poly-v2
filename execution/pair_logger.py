@@ -2,8 +2,10 @@
 pair_logger.py — CSV logging for pair trading strategy.
 
 Logs:
-  - pair_buys_YYYYMMDD.csv     — Every individual buy (YES or NO leg)
-  - pair_windows_YYYYMMDD.csv  — End-of-window settlement results
+  - pair_buys_YYYYMMDD.csv        — Every individual buy (YES or NO leg)
+  - pair_windows_YYYYMMDD.csv     — End-of-window settlement results
+  - pair_rejections_YYYYMMDD.csv  — Live CLOB order rejections
+  - pair_filters_YYYYMMDD.csv     — Strategy evaluate() filter events
 """
 
 import os
@@ -173,3 +175,102 @@ def log_window_settlement(market: str, result, cumulative_pnl: float,
         wctx.get("avg_slippage_cents", "N/A"),
         mode,
     ], WINDOW_HEADER)
+
+
+# ──────────────────────────────────────────────────────────
+# REJECTION LOG — Live CLOB order rejections
+# ──────────────────────────────────────────────────────────
+
+REJECTION_HEADER = [
+    "timestamp", "market", "side", "qty", "price",
+    "order_id", "status", "error_msg",
+    "yes_ask", "no_ask", "spread",
+    "yes_qty", "no_qty", "pair_cost", "skew",
+    "time_remaining", "zone", "mode",
+    "lat_ms", "is_technical", "price_moved",
+]
+
+
+def log_pair_rejection(market: str, action: dict, reject_info: dict,
+                       engine_stats: dict, ctx: dict = None, mode: str = "LIVE"):
+    """Log a CLOB order rejection with full context."""
+    if ctx is None:
+        ctx = {}
+    filename = f"pair_rejections_{_date_str()}.csv"
+
+    # Technical error = exception/bad_response, not market-driven
+    status = reject_info.get("status", "")
+    is_technical = status in ("exception", "bad_response")
+
+    # Price moved: compare submitted price to current ask after rejection
+    # Positive = price moved against us, negative = price improved
+    submitted = action.get("vwap_price", 0)
+    current_ask = ctx.get("current_ask_after", 0)
+    price_moved = round(current_ask - submitted, 4) if current_ask and submitted else ""
+
+    _append_row(filename, [
+        _time_str(),
+        market,
+        action.get("side", ""),
+        action.get("qty", 0),
+        f"{submitted:.4f}",
+        reject_info.get("order_id", ""),
+        status,
+        reject_info.get("error", ""),
+        f"{ctx.get('yes_ask', 0):.4f}",
+        f"{ctx.get('no_ask', 0):.4f}",
+        f"{ctx.get('spread', 0):.4f}",
+        engine_stats.get("yes_qty", 0),
+        engine_stats.get("no_qty", 0),
+        f"{engine_stats.get('pair_cost', 0):.4f}",
+        f"{engine_stats.get('skew', 0):.3f}",
+        f"{engine_stats.get('time_remaining', 0):.0f}",
+        ctx.get("zone", ""),
+        mode,
+        f"{ctx.get('lat_ms', 0):.0f}",
+        "YES" if is_technical else "NO",
+        price_moved,
+    ], REJECTION_HEADER)
+
+
+# ──────────────────────────────────────────────────────────
+# FILTER LOG — Strategy evaluate() filter events
+# ──────────────────────────────────────────────────────────
+
+FILTER_HEADER = [
+    "timestamp", "market", "reason", "value", "threshold",
+    "yes_ask", "no_ask", "time_remaining", "zone",
+    "spread_bps", "tick_distance",
+]
+
+
+def log_pair_filter(market: str, reason: str, value: float, threshold: float,
+                    ctx: dict = None):
+    """Log a strategy filter event (evaluate returned None)."""
+    if ctx is None:
+        ctx = {}
+    filename = f"pair_filters_{_date_str()}.csv"
+
+    # Spread in basis points (1 bps = 0.01 cents on a $1 market)
+    yes_ask = ctx.get("yes_ask", 0)
+    no_ask = ctx.get("no_ask", 0)
+    yes_bid = ctx.get("yes_bid", 0)
+    mid = (yes_ask + yes_bid) / 2 if yes_ask and yes_bid else 0
+    spread_bps = round((yes_ask - yes_bid) * 10000, 0) if yes_ask and yes_bid else ""
+
+    # Tick distance: how many $0.01 ticks from mid to the filtered ask
+    tick_distance = round((yes_ask - mid) / 0.01, 1) if mid else ""
+
+    _append_row(filename, [
+        _time_str(),
+        market,
+        reason,
+        f"{value:.4f}" if value else "",
+        f"{threshold:.4f}" if threshold else "",
+        f"{yes_ask:.4f}",
+        f"{no_ask:.4f}",
+        f"{ctx.get('time_remaining', 0):.0f}",
+        ctx.get("zone", ""),
+        spread_bps,
+        tick_distance,
+    ], FILTER_HEADER)

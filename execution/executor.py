@@ -349,12 +349,12 @@ class LiveExecutor(BaseExecutor):
                 exc_info=True,
             )
             self._rollback(engine, snapshot)
-            return None
+            return {"rejected": True, "status": "exception", "error": str(exc), "order_id": ""}
 
         if not isinstance(response, dict):
             logger.error(f"[LIVE] Unexpected response: {response!r}")
             self._rollback(engine, snapshot)
-            return None
+            return {"rejected": True, "status": "bad_response", "error": repr(response), "order_id": ""}
 
         # Pull the key fields from the CLOB response.
         # The field names observed in production: "orderID", "status", "errorMsg".
@@ -376,7 +376,7 @@ class LiveExecutor(BaseExecutor):
             f"status={status!r} error={error!r} orderID={order_id!r}"
         )
         self._rollback(engine, snapshot)
-        return None
+        return {"rejected": True, "status": status, "error": error, "order_id": order_id}
 
 
 # ─────────────────────────────────────────────────────────────────────

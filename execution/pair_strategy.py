@@ -254,6 +254,9 @@ class PairTradingEngine:
         self.buys_executed: int = 0
         self.buys_filtered: int = 0
         self.filter_reasons: dict = {}
+        self.last_filter_reason: str = ""
+        self.last_filter_value: float = 0.0
+        self.last_filter_threshold: float = 0.0
 
     def reset(self):
         """Reset for a new window."""
@@ -276,6 +279,9 @@ class PairTradingEngine:
         self.buys_executed = 0
         self.buys_filtered = 0
         self.filter_reasons = {}
+        self.last_filter_reason = ""
+        self.last_filter_value = 0.0
+        self.last_filter_threshold = 0.0
         self.window_start = time.time()
 
     # ──────────────────────────────────────────────────────
@@ -483,7 +489,7 @@ class PairTradingEngine:
         if self.in_panic_mode and is_completing_pair:
             cap = cfg.panic_max_position_usd
         if self.total_capital >= cap:
-            self._filter("capital_limit")
+            self._filter("capital_limit", self.total_capital, cap)
             return None
 
         # Gate 2: Inventory Lock
@@ -551,13 +557,13 @@ class PairTradingEngine:
                 fee_opp = polymarket_taker_fee(opposite_ask)
                 projected_pair = (ask_price * (1.0 + fee_this)) + (opposite_ask * (1.0 + fee_opp))
                 if projected_pair > cfg.atomic_entry_max_pair:
-                    self._filter("atomic_entry_too_wide")
+                    self._filter("atomic_entry_too_wide", projected_pair, cfg.atomic_entry_max_pair)
                     return None
 
             # Gate 7: DYNAMIC DEAD ZONE (Gemini #4)
             dead_zone_limit = self._dynamic_dead_zone(side)
             if ask_price > dead_zone_limit:
-                self._filter("dead_zone_dynamic")
+                self._filter("dead_zone_dynamic", ask_price, dead_zone_limit)
                 return None
 
             # Gate 8: SIGNAL FILTERS
@@ -570,10 +576,10 @@ class PairTradingEngine:
             else:
                 # Value zone: apply signal filters
                 if obi_for_side > cfg.obi_delay_threshold:
-                    self._filter("obi_delay")
+                    self._filter("obi_delay", obi_for_side, cfg.obi_delay_threshold)
                     return None
                 if flow_for_side > cfg.flow_delay_threshold:
-                    self._filter("flow_delay")
+                    self._filter("flow_delay", flow_for_side, cfg.flow_delay_threshold)
                     return None
 
         # === BLOCKCHAIN CLOB EXECUTION ===
@@ -585,12 +591,12 @@ class PairTradingEngine:
 
         if fill_prob <= 0.0:
             self.fills_rejected += 1
-            self._filter("ask_too_fresh")
+            self._filter("ask_too_fresh", ask_age, 200.0)
             return None
         if fill_prob < 1.0:
             if random.random() > fill_prob:
                 self.fills_rejected += 1
-                self._filter("latency_race_lost")
+                self._filter("latency_race_lost", ask_age, 500.0)
                 return None
 
         # THETA-ADJUSTED ORDER SIZE (Gemini #3)
@@ -627,7 +633,7 @@ class PairTradingEngine:
                 return None
         else:
             if not self._would_pair_cost_be_ok(side, qty, fill_price):
-                self._filter("pair_cost_exceeded")
+                self._filter("pair_cost_exceeded", fill_price, cfg.max_pair_cost)
                 return None
 
         is_snipe = (ask_price <= cfg.sniper_threshold) and has_sweep
@@ -747,9 +753,12 @@ class PairTradingEngine:
             self.yes_locked = False
             self.no_locked = False
 
-    def _filter(self, reason: str):
+    def _filter(self, reason: str, value: float = 0.0, threshold: float = 0.0):
         self.buys_filtered += 1
         self.filter_reasons[reason] = self.filter_reasons.get(reason, 0) + 1
+        self.last_filter_reason = reason
+        self.last_filter_value = value
+        self.last_filter_threshold = threshold
 
     # ──────────────────────────────────────────────────────
     # SETTLEMENT (Rule 6)

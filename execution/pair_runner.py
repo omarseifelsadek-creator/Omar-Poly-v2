@@ -30,7 +30,7 @@ from analytics.metrics import compute_all_metrics
 from analytics.detectors import LevelTracker
 from analytics.momentum import MomentumEngine
 from execution.pair_strategy import PairTradingEngine, PairConfig, WindowResult, polymarket_taker_fee
-from execution.pair_logger import log_pair_buy, log_window_settlement
+from execution.pair_logger import log_pair_buy, log_window_settlement, log_pair_rejection, log_pair_filter
 from execution.executor import make_executor, BaseExecutor
 from execution.pair_dashboard import PairDashboard, build_state
 from execution.market_spec import MarketSpec, make_market_spec
@@ -679,19 +679,76 @@ class PairRunner:
             sweep_side=sweep_side,
         )
 
-        if action:
-            # Resolve the token ID for this leg (YES or NO side)
-            buy_token_id = (
-                self.yes_token_id if action["side"] == "YES" else self.no_token_id
-            )
+        if not action:
+            # Log strategy filter event
+            if self.engine.last_filter_reason:
+                market_label = (
+                    f"{self.spec.display_name_long} — {self.window.time_label}"
+                    if self.window else self.spec.display_name
+                )
+                t_rem = self.engine.time_remaining
+                if t_rem < self.engine.config.panic_time_seconds:
+                    fzone = "Panic"
+                elif min(yes_ask, no_ask) <= 0.35:
+                    fzone = "Sniper"
+                elif min(yes_ask, no_ask) <= 0.44:
+                    fzone = "Value"
+                else:
+                    fzone = "Dead"
+                log_pair_filter(market_label, self.engine.last_filter_reason,
+                                self.engine.last_filter_value,
+                                self.engine.last_filter_threshold,
+                                {"yes_ask": yes_ask, "no_ask": no_ask,
+                                 "yes_bid": yes_bid or 0,
+                                 "time_remaining": t_rem, "zone": fzone})
+            return
 
-            # Execute — paper: instant pass-through, live: real FOK order.
-            # On live failure the engine state is restored and None is returned.
-            action = await self.executor.execute(
-                action, self.engine, snapshot, buy_token_id
+        # Resolve the token ID for this leg (YES or NO side)
+        buy_token_id = (
+            self.yes_token_id if action["side"] == "YES" else self.no_token_id
+        )
+
+        # Execute — paper: instant pass-through, live: real FOK order.
+        # On live failure the engine state is restored and rejection info returned.
+        orig_action = dict(action)  # Save pre-execute action for rejection logging
+        t0 = time.time()
+        action = await self.executor.execute(
+            action, self.engine, snapshot, buy_token_id
+        )
+        lat_ms = (time.time() - t0) * 1000
+        if not action or action.get("rejected"):
+            # Log CLOB rejection with full context
+            market_label = (
+                f"{self.spec.display_name_long} — {self.window.time_label}"
+                if self.window else self.spec.display_name
             )
-            if action is None:
-                return   # live order rejected — engine state already rolled back
+            t_rem = self.engine.time_remaining
+            raw = orig_action.get("raw_price", 0)
+            fill_side = orig_action.get("side", "YES")
+            if t_rem < self.engine.config.panic_time_seconds:
+                rzone = "Panic"
+            elif raw <= 0.35:
+                rzone = "Sniper"
+            elif raw <= 0.44:
+                rzone = "Value"
+            else:
+                rzone = "Dead"
+            # Current ask AFTER rejection — did the price move?
+            current_ask_after = (
+                self.yes_book.best_ask if fill_side == "YES" else self.no_book.best_ask
+            ) or 0
+            reject_info = action if isinstance(action, dict) else {"status": "unknown", "error": "", "order_id": ""}
+            log_pair_rejection(
+                market_label, orig_action, reject_info,
+                self.engine.get_stats(),
+                {"yes_ask": yes_ask, "no_ask": no_ask,
+                 "spread": (yes_ask - (yes_bid or 0)),
+                 "time_remaining": t_rem, "zone": rzone,
+                 "lat_ms": lat_ms,
+                 "current_ask_after": current_ask_after},
+                mode=self.mode.upper(),
+            )
+            return   # engine state already rolled back
 
             # Track confirmed live fill for live PnL
             if action.get("mode") == "LIVE":
