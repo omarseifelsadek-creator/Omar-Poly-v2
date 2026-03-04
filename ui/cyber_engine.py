@@ -155,6 +155,7 @@ class SyntheticEngine:
         # Anomaly feed
         self._anomaly_feed: deque = deque(maxlen=50)
         self._last_anomaly_check: float = 0.0
+        self._last_calc_time: float = 0.0
 
         # Metrics cache
         self._yes_metrics: Optional[Metrics] = None
@@ -302,8 +303,14 @@ class SyntheticEngine:
                             self._flow_bucket_vol["sell"] += parsed.size * parsed.price
                         self._cum_delta = self._buy_vol - self._sell_vol
 
-                # Update analytics after each batch
-                self._update_analytics()
+                # Throttle heavy analytics to 4 Hz (every 250ms)
+                now = time.time()
+                if now - self._last_calc_time >= 0.25:
+                    self._update_analytics()
+                    self._last_calc_time = now
+
+                # Yield to event loop so UI can render
+                await asyncio.sleep(0)
 
         except ConnectionClosed:
             logger.info("WS closed in message loop")
