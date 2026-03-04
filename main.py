@@ -850,6 +850,131 @@ def select_pair_market():
 # ENTRY POINT
 # ──────────────────────────────────────────────────────────────
 
+def _extract_both_tokens(market: dict) -> Optional[tuple[str, str, str]]:
+    """
+    Extract YES and NO token IDs from a market dict.
+    Returns (yes_token_id, no_token_id, question) or None.
+    """
+    token_ids = market.get("clobTokenIds", [])
+    if isinstance(token_ids, str):
+        try:
+            token_ids = json.loads(token_ids)
+        except (json.JSONDecodeError, TypeError):
+            token_ids = [token_ids]
+
+    if len(token_ids) < 2:
+        return None
+
+    outcomes = market.get("outcomes", [])
+    if isinstance(outcomes, str):
+        try:
+            outcomes = json.loads(outcomes)
+        except (json.JSONDecodeError, TypeError):
+            outcomes = []
+
+    question = market.get("question", "Unknown Market")
+
+    # Determine YES vs NO ordering
+    yes_idx, no_idx = 0, 1
+    if len(outcomes) >= 2:
+        if outcomes[0].lower() in ("no", "down"):
+            yes_idx, no_idx = 1, 0
+
+    return token_ids[yes_idx], token_ids[no_idx], question
+
+
+async def _select_market_for_engine() -> Optional[tuple[str, str, str]]:
+    """
+    Interactive market selector that returns BOTH token IDs.
+    Returns (yes_token_id, no_token_id, question) or None.
+    """
+    rest = RestClient()
+
+    console.print(f"\n[bold #00FFFF]>>> SYNTHETIC MARKET MICROSTRUCTURE ENGINE <<<[/bold #00FFFF]")
+    console.print(f"[dim]Pure visualization — no trading logic[/dim]\n")
+
+    while True:
+        console.print("[bold]Choose an option:[/bold]")
+        console.print("  [cyan]1[/cyan] — Search markets by keyword")
+        console.print("  [cyan]2[/cyan] — Browse top active markets")
+        console.print("  [cyan]3[/cyan] — Enter a market URL slug")
+        console.print()
+
+        choice = Prompt.ask("Select", choices=["1", "2", "3"], default="1")
+
+        if choice == "1":
+            query = Prompt.ask("Search for")
+            console.print(f"\n[dim]Searching for '{query}'...[/dim]")
+            markets = await rest.search_markets(query, limit=10)
+            if not markets:
+                console.print("[yellow]No markets found. Try again.[/yellow]\n")
+                continue
+
+            selected = _display_and_pick_market_raw(markets)
+            if selected:
+                result = _extract_both_tokens(selected)
+                if result:
+                    await rest.close()
+                    return result
+                console.print("[yellow]Market needs 2 tokens (YES + NO).[/yellow]\n")
+
+        elif choice == "2":
+            console.print("\n[dim]Fetching top active markets...[/dim]")
+            markets = await rest.get_active_markets(limit=15)
+            if not markets:
+                console.print("[yellow]Could not fetch markets.[/yellow]\n")
+                continue
+
+            selected = _display_and_pick_market_raw(markets)
+            if selected:
+                result = _extract_both_tokens(selected)
+                if result:
+                    await rest.close()
+                    return result
+                console.print("[yellow]Market needs 2 tokens (YES + NO).[/yellow]\n")
+
+        elif choice == "3":
+            slug = Prompt.ask("Enter market URL slug")
+            console.print(f"\n[dim]Looking up '{slug}'...[/dim]")
+            market = await rest.get_market_by_slug(slug)
+            if market:
+                result = _extract_both_tokens(market)
+                if result:
+                    await rest.close()
+                    return result
+                console.print("[yellow]Market needs 2 tokens (YES + NO).[/yellow]\n")
+            else:
+                console.print("[yellow]Market not found.[/yellow]\n")
+
+    await rest.close()
+
+
+def _display_and_pick_market_raw(markets: list[dict]) -> Optional[dict]:
+    """Display markets and return the selected market dict (not token)."""
+    console.print()
+    for i, m in enumerate(markets, 1):
+        question = m.get("question", "Unknown")
+        vol_24h = float(m.get("volume24hr", 0) or 0)
+        vol_total = float(m.get("volume", 0) or 0)
+        vol_display = vol_24h if vol_24h > 0 else vol_total
+        vol_label = "24h" if vol_24h > 0 else "tot"
+        active = "+" if m.get("active") and not m.get("closed") else "-"
+        token_ids = m.get("clobTokenIds", [])
+        n_tokens = len(token_ids) if isinstance(token_ids, list) else 1
+
+        console.print(
+            f"  [cyan]{i:2d}[/cyan]  {active} {question[:65]}"
+            f"  [dim]Vol({vol_label}): ${vol_display:,.0f}  Tokens: {n_tokens}[/dim]"
+        )
+
+    console.print(f"\n  [dim] 0  — Go back[/dim]\n")
+    idx = IntPrompt.ask("Pick a market", default=1)
+
+    if idx == 0 or idx > len(markets):
+        return None
+    return markets[idx - 1]
+
+
 async def main():
     args = parse_args()
 
@@ -866,75 +991,62 @@ async def main():
         from execution.pair_runner import PairRunner
         from execution.market_spec import make_market_spec
         if args.asset and args.timeframe:
-            # CLI shortcut: skip menu, use --mode flag (default paper)
             spec = make_market_spec(args.asset, args.timeframe)
             mode = args.mode
         else:
-            # Interactive menu: picks asset, timeframe, AND mode
             spec, mode = select_pair_market()
         runner = PairRunner(mode=mode, spec=spec)
         await runner.run()
         return
 
-    token_id = None
+    # ── Default: Synthetic Market Microstructure Engine ──
+    from ui.cyber_engine import SyntheticEngine
+
+    yes_token = None
+    no_token = None
     question = ""
-    token_label = "Yes"  # Default assumption
 
-    # Determine token ID from arguments or interactive selection
-    if args.token:
-        token_id = args.token
-        question = "Custom Market"
-
-    elif args.slug:
+    if args.slug:
         rest = RestClient()
         market = await rest.get_market_by_slug(args.slug)
         await rest.close()
         if market:
-            token_ids = market.get("clobTokenIds", [])
-            if isinstance(token_ids, str):
-                try:
-                    token_ids = json.loads(token_ids)
-                except (json.JSONDecodeError, TypeError):
-                    token_ids = [token_ids]
-            if token_ids:
-                token_id = token_ids[0]
-                question = market.get("question", args.slug)
-                # First token is typically "Yes"
-                outcomes = market.get("outcomes", [])
-                if isinstance(outcomes, str):
-                    try:
-                        outcomes = json.loads(outcomes)
-                    except (json.JSONDecodeError, TypeError):
-                        outcomes = []
-                token_label = outcomes[0] if outcomes else "Yes"
+            result = _extract_both_tokens(market)
+            if result:
+                yes_token, no_token, question = result
 
     elif args.search:
         rest = RestClient()
         markets = await rest.search_markets(args.search)
         await rest.close()
         if markets:
-            result = _display_and_pick_market(markets)
-            if result:
-                token_id, question, token_label = result
+            selected = _display_and_pick_market_raw(markets)
+            if selected:
+                result = _extract_both_tokens(selected)
+                if result:
+                    yes_token, no_token, question = result
 
-    # If still no token, go interactive
-    if not token_id:
-        if settings.TOKEN_ID:
-            token_id = settings.TOKEN_ID
-            question = settings.MARKET_QUESTION
-        else:
-            result = await select_market_interactive()
-            if result:
-                token_id, question, token_label = result
+    # Interactive selection if nothing resolved yet
+    if not yes_token:
+        result = await _select_market_for_engine()
+        if result:
+            yes_token, no_token, question = result
 
-    if not token_id:
-        console.print("[red]No market selected. Exiting.[/red]")
+    if not yes_token or not no_token:
+        console.print("[red]No market selected (need YES + NO tokens). Exiting.[/red]")
         return
 
-    # Create and run the application
-    app = OBIApp(token_id=token_id, market_question=question, token_label=token_label,
-                 trading_mode=args.mode)
-    await app.run()
+    console.print(f"\n[bold]Market:[/bold] {question}")
+    console.print(f"[#00FFFF]YES:[/#00FFFF] {yes_token[:40]}...")
+    console.print(f"[#FF1493]NO:[/#FF1493]  {no_token[:40]}...")
+    console.print()
+
+    engine = SyntheticEngine(
+        yes_token_id=yes_token,
+        no_token_id=no_token,
+        market_question=question,
+    )
+    await engine.run()
 
 
 if __name__ == "__main__":
