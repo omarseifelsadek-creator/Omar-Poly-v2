@@ -560,12 +560,33 @@ class PairRunner:
         """Evaluate pair trading opportunity with current state."""
         # Need both books initialized
         if not self.yes_book.is_initialized or not self.no_book.is_initialized:
+            if self._msg_count % 500 == 1:
+                logger.warning(
+                    f"[DIAG] Books not init: YES={self.yes_book.is_initialized} "
+                    f"(bids={len(self.yes_book._bids)}, asks={len(self.yes_book._asks)}) "
+                    f"NO={self.no_book.is_initialized} "
+                    f"(bids={len(self.no_book._bids)}, asks={len(self.no_book._asks)}) "
+                    f"msgs={self._msg_count}"
+                )
             return
 
         yes_ask = self.yes_book.best_ask
         no_ask = self.no_book.best_ask
         yes_bid = self.yes_book.best_bid
         no_bid = self.no_book.best_bid
+
+        # ── Periodic diagnostic: log what the engine sees ──
+        if self._msg_count % 500 == 0:
+            yes_asks_top = self.yes_book.get_sorted_asks(max_levels=3)
+            no_asks_top = self.no_book.get_sorted_asks(max_levels=3)
+            logger.warning(
+                f"[DIAG] YES ask=${yes_ask} bid=${yes_bid} "
+                f"NO ask=${no_ask} bid=${no_bid} | "
+                f"YES asks={[(l.price, l.size) for l in yes_asks_top]} | "
+                f"NO asks={[(l.price, l.size) for l in no_asks_top]} | "
+                f"pair_cost=${(yes_ask or 0)+(no_ask or 0):.4f} | "
+                f"T-{self.engine.time_remaining:.0f}s | msgs={self._msg_count}"
+            )
 
         if not yes_ask or not no_ask:
             return

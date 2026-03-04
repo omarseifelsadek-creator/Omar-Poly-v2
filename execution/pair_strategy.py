@@ -184,7 +184,7 @@ class PairConfig:
 
     # ── ATOMIC ENTRY (Gemini #2) ──
     # Only open Leg 1 if opposite book liquidity allows pair cost < target
-    atomic_entry_max_pair: float = 0.95  # max projected pair cost to allow Leg 1
+    atomic_entry_max_pair: float = 1.05  # max projected pair cost to allow Leg 1
 
     # ── BLOCKCHAIN CLOB EXECUTION ──
     min_buy_cooldown_s: float = 2.0       # Polygon block time
