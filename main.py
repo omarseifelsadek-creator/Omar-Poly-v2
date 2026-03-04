@@ -1016,7 +1016,34 @@ async def main():
             console.print(f"  [#00FF41]●[/#00FF41] {asset.upper()}/{tf} runner created")
 
         console.print()
-        await asyncio.gather(*(r.run() for r in runners))
+
+        # Run all runners as tasks so we can cancel them on Ctrl+C
+        tasks = [asyncio.create_task(r.run()) for r in runners]
+
+        # Install signal handler: first Ctrl+C → graceful stop, second → force kill
+        import signal
+        _stop_count = 0
+
+        def _headless_stop(sig, frame):
+            nonlocal _stop_count
+            _stop_count += 1
+            if _stop_count == 1:
+                console.print(
+                    "\n[bold yellow]⚠  Ctrl+C — stopping all runners after current windows settle...[/bold yellow]"
+                )
+                for r in runners:
+                    r.request_stop()
+            else:
+                console.print("\n[bold red]Force stopping all runners.[/bold red]")
+                for t in tasks:
+                    t.cancel()
+
+        signal.signal(signal.SIGINT, _headless_stop)
+
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            pass
         return
 
     # Pair trading mode

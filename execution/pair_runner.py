@@ -217,21 +217,27 @@ class PairRunner:
         # Graceful stop: set by Ctrl+C, checked after window settlement
         self._stop_requested: bool = False
 
+    def request_stop(self):
+        """Signal this runner to stop after the current window."""
+        self._stop_requested = True
+
     async def run(self):
         """Main entry point — rotates through 5-minute windows forever."""
         console.print("\n[bold cyan]═══ PAIR TRADING MODE ═══[/bold cyan]")
         console.print(f"[dim]Strategy: Accumulate matched YES/NO pairs < $0.96[/dim]")
         console.print(f"[dim]Mode: {self.mode.upper()} | Settlement at window expiry[/dim]\n")
 
-        # Install graceful stop handler — Ctrl+C once = finish window then exit
-        import signal
-        def _request_stop(sig, frame):
-            if not self._stop_requested:
-                self._stop_requested = True
-                console.print(
-                    "\n[bold yellow]⚠  Stop requested — finishing current window then exiting...[/bold yellow]"
-                )
-        signal.signal(signal.SIGINT, _request_stop)
+        # Install graceful stop handler ONLY when running standalone (not headless).
+        # In headless mode, main.py manages signal handling for all runners.
+        if not self.headless:
+            import signal
+            def _request_stop(sig, frame):
+                if not self._stop_requested:
+                    self._stop_requested = True
+                    console.print(
+                        "\n[bold yellow]⚠  Stop requested — finishing current window then exiting...[/bold yellow]"
+                    )
+            signal.signal(signal.SIGINT, _request_stop)
 
         # Start Chainlink price stream (runs alongside order book WS)
         self._chainlink.start()
