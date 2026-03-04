@@ -5,11 +5,11 @@ Computes the current window from UTC time, generates the event slug,
 fetches token IDs from Gamma API, and signals when it's time to rotate
 to the next window.
 
-Supports multiple assets (BTC, ETH, SOL, XRP) and timeframes (5m, 15m, 1h, 4h)
+Supports multiple assets (BTC, ETH, SOL, XRP) and timeframes (5m, 15m, 1h)
 via the MarketSpec configuration object.
 
 SLUG FORMATS:
-  5m/15m/4h: {asset}-updown-{tf}-{unix}  → btc-updown-5m-1740798600
+  5m/15m: {asset}-updown-{tf}-{unix}  → btc-updown-5m-1740798600
   1h:        {name}-up-or-down-{month}-{day}-{hour}{ampm}-et
              → bitcoin-up-or-down-march-5-5pm-et
 """

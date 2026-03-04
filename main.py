@@ -634,7 +634,7 @@ Examples:
     )
     parser.add_argument(
         "--headless", action="store_true",
-        help="No dashboard — run all 4 BTC timeframes simultaneously, log to CSV only",
+        help="No dashboard — run all 3 BTC timeframes simultaneously, log to CSV only",
     )
     parser.add_argument(
         "--asset", type=str, default=None,
@@ -643,8 +643,8 @@ Examples:
     )
     parser.add_argument(
         "--timeframe", type=str, default=None,
-        choices=["5m", "15m", "1h", "4h"],
-        help="Timeframe for pair trading (5m, 15m, 1h, 4h). Skips interactive menu.",
+        choices=["5m", "15m", "1h"],
+        help="Timeframe for pair trading (5m, 15m, 1h). Skips interactive menu.",
     )
     return parser.parse_args()
 
@@ -804,7 +804,6 @@ def select_pair_market():
         ("5m",  "5 minutes"),
         ("15m", "15 minutes"),
         ("1h",  "1 hour"),
-        ("4h",  "4 hours"),
     ]
     _MODE_MENU = [
         ("paper",   "Paper",   "Simulated fills, no auth needed"),
@@ -990,14 +989,14 @@ async def main():
         await run_btc5m(args)
         return
 
-    # Headless multi-runner: all 4 BTC timeframes simultaneously, no dashboard
+    # Headless multi-runner: all 3 BTC timeframes simultaneously, no dashboard
     if args.headless:
         from execution.pair_runner import PairRunner
         from execution.market_spec import make_market_spec
 
         asset = args.asset or "btc"
         mode = args.mode
-        timeframes = ["5m", "15m", "1h", "4h"]
+        timeframes = ["5m", "15m", "1h"]
 
         if args.timeframe:
             # Single headless runner for specific timeframe

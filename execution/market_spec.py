@@ -23,10 +23,10 @@ class MarketSpec:
 
     # Identity
     asset: str              # "BTC", "ETH", "SOL", "XRP"
-    timeframe: str          # "5m", "15m", "1h", "4h"
+    timeframe: str          # "5m", "15m", "1h"
 
     # Derived constants
-    interval_seconds: int   # 300, 900, 3600, 14400
+    interval_seconds: int   # 300, 900, 3600
     binance_symbol: str     # "BTCUSDT", "ETHUSDT", "SOLUSDT"
     binance_interval: str   # "5m", "15m", "1h", "6h"
     chainlink_symbol: str   # "btc/usd", "eth/usd", "sol/usd"
@@ -37,8 +37,8 @@ class MarketSpec:
     def build_event_slug(self, window_start: int) -> str:
         """Build the Polymarket event slug for a specific window.
 
-        5m/15m/4h use timestamp slugs: btc-updown-5m-1772581500
-        1h uses human-readable slugs:  bitcoin-up-or-down-march-5-5pm-et
+        5m/15m use timestamp slugs: btc-updown-5m-1772581500
+        1h uses human-readable slugs: bitcoin-up-or-down-march-5-5pm-et
         """
         if self.timeframe != "1h":
             return f"{self.slug_prefix}-{window_start}"
@@ -72,7 +72,7 @@ class MarketSpec:
         because order books stay deep longer — no sudden liquidity cliff."""
         if self.interval_seconds <= 900:        # 5m, 15m: 3.3%
             return round(self.interval_seconds * 0.033, 1)
-        else:                                    # 1h, 4h: 1.0%
+        else:                                    # 1h: 1.0%
             return round(self.interval_seconds * 0.010, 1)
 
     @property
@@ -81,7 +81,7 @@ class MarketSpec:
         ratio because per-second order flow is thinner."""
         if self.interval_seconds <= 900:        # 5m, 15m: 60%
             return round(self.interval_seconds * 0.60, 1)
-        else:                                    # 1h, 4h: 80%
+        else:                                    # 1h: 80%
             return round(self.interval_seconds * 0.80, 1)
 
     @property
@@ -90,7 +90,7 @@ class MarketSpec:
         books stay liquid — no need to block new opens early."""
         if self.interval_seconds <= 900:        # 5m, 15m: 10%
             return round(self.interval_seconds * 0.10, 1)
-        else:                                    # 1h, 4h: 3%
+        else:                                    # 1h: 3%
             return round(self.interval_seconds * 0.03, 1)
 
     @property
@@ -100,7 +100,7 @@ class MarketSpec:
         if self.interval_seconds <= 900:        # 5m: 30%, 15m: 25%
             ratio = 0.30 if self.interval_seconds <= 300 else 0.25
             return round(self.interval_seconds * ratio, 1)
-        else:                                    # 1h, 4h: 10%
+        else:                                    # 1h: 10%
             return round(self.interval_seconds * 0.10, 1)
 
     @property
@@ -111,7 +111,7 @@ class MarketSpec:
     @property
     def window_skip_threshold_s(self) -> float:
         """Skip a window if fewer than this many seconds remain."""
-        # 20% for short windows (5m/15m), 10% for long windows (1h/4h)
+        # 20% for short windows (5m/15m), 10% for long windows (1h)
         ratio = 0.10 if self.interval_seconds >= 3600 else 0.20
         return max(60.0, round(self.interval_seconds * ratio, 1))
 
@@ -145,7 +145,6 @@ _TIMEFRAMES: dict[str, tuple[int, str]] = {
     "5m":  (300,   "5m"),
     "15m": (900,   "15m"),
     "1h":  (3600,  "1h"),
-    "4h":  (14400, "4h"),
 }
 
 SUPPORTED_ASSETS = list(_ASSETS.keys())
@@ -158,7 +157,7 @@ def make_market_spec(asset: str, timeframe: str) -> MarketSpec:
 
     Args:
         asset: "btc", "eth", "sol", or "xrp" (case-insensitive)
-        timeframe: "5m", "15m", "1h", or "4h"
+        timeframe: "5m", "15m", or "1h"
 
     Raises:
         ValueError if asset or timeframe is unknown.
