@@ -154,12 +154,18 @@ class PairRunner:
         self.yes_momentum = MomentumEngine()
         self.no_momentum = MomentumEngine()
 
-        # The pair trading engine — timing params from MarketSpec
+        # The pair trading engine — timing params from MarketSpec + edge refinements
         config = PairConfig(
             panic_time_seconds=self.spec.panic_time_seconds,
             theta_full_size_until_s=self.spec.theta_full_size_until_s,
             theta_half_size_until_s=self.spec.theta_half_size_until_s,
             sniper_signal_min_time=self.spec.sniper_signal_min_time,
+            # ── Edge refinements (v15) ──
+            max_skew_pct=0.30,              # was 0.50 — tighter imbalance lock
+            max_pair_cost=0.96,             # was 0.99 — only cheap pairs
+            atomic_entry_max_pair=0.99,     # was 1.05 — stricter first-leg gate
+            obi_delay_threshold=0.85,       # was 0.75 — allow more early fills
+            flow_delay_threshold=0.75,      # was 0.60 — allow more early fills
         )
         self.engine = PairTradingEngine(config, window_duration=float(self.spec.interval_seconds))
 
@@ -636,6 +642,11 @@ class PairRunner:
         if self.no_metrics and self.no_metrics.sweep_events:
             has_sweep = True
             sweep_side = "NO"
+
+        # Cap unmatched exposure at $30 — prevent runaway one-sided positions
+        unmatched_usd = abs(self.engine.yes_cost - self.engine.no_cost)
+        if unmatched_usd > 30.0:
+            return
 
         # Snapshot engine state BEFORE evaluate() so LiveExecutor can roll
         # back if the real CLOB order fails. PaperExecutor returns {} here.
