@@ -310,8 +310,9 @@ class PairRunner:
             # Settle the window (async — polls API for actual resolution)
             await self._settle_window()
 
-            # Auto-generate report every 12 windows
-            if self.windows_traded > 0 and self.windows_traded % 12 == 0:
+            # Auto-generate report: every 12 windows for 5m, every window for slower TFs
+            report_interval = 12 if self.spec.timeframe == "5m" else 1
+            if self.windows_traded > 0 and self.windows_traded % report_interval == 0:
                 self._auto_report()
 
             # Graceful stop: Ctrl+C was pressed — exit after settlement
@@ -1049,7 +1050,7 @@ class PairRunner:
         gamble_color = "green" if result.gamble_result >= 0 else "red"
 
         console.print(f"\n[bold cyan]{'═'*60}[/bold cyan]")
-        console.print(f"[bold cyan]  SETTLEMENT — {winner} Won[/bold cyan]")
+        console.print(f"[bold cyan]  [{self.spec.display_name}] SETTLEMENT — {winner} Won[/bold cyan]")
         console.print(f"[bold cyan]{'═'*60}[/bold cyan]")
         console.print(f"  YES Shares:     {result.yes_qty:.0f} @ avg ${result.yes_avg_cost:.4f}")
         console.print(f"  NO Shares:      {result.no_qty:.0f} @ avg ${result.no_avg_cost:.4f}")

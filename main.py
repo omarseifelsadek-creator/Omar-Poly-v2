@@ -1034,7 +1034,12 @@ async def main():
                 for r in runners:
                     r.request_stop()
             else:
-                console.print("\n[bold red]Force stopping all runners.[/bold red]")
+                console.print("\n[bold red]Force stopping — flushing reports...[/bold red]")
+                for r in runners:
+                    try:
+                        r._print_session_summary()
+                    except Exception:
+                        pass
                 for t in tasks:
                     t.cancel()
 
