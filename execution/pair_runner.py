@@ -269,7 +269,9 @@ class PairRunner:
 
             console.print(f"\n[green]{'='*60}[/green]")
             console.print(f"[green]Window:[/green] {window.question}")
-            console.print(f"[dim]Time: {window.time_label} ({window.seconds_remaining:.0f}s remaining)[/dim]")
+            secs = window.seconds_remaining
+            time_str = f"{secs/60:.1f}m" if secs >= 120 else f"{secs:.0f}s"
+            console.print(f"[dim]Time: {window.time_label} ({time_str} remaining)[/dim]")
             console.print(f"[dim]end_ts: {window.end_ts} (now: {int(time.time())})[/dim]")
             console.print(f"[dim]YES (Up):  {self.yes_token_id[:30]}...[/dim]")
             console.print(f"[dim]NO (Down): {self.no_token_id[:30]}...[/dim]")
