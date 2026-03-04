@@ -637,6 +637,10 @@ Examples:
         help="No dashboard — run all 3 BTC timeframes simultaneously, log to CSV only",
     )
     parser.add_argument(
+        "--record", action="store_true",
+        help="Record L2 order book snapshots to CSV for backtesting (no trading)",
+    )
+    parser.add_argument(
         "--asset", type=str, default=None,
         choices=["btc", "eth", "sol", "xrp"],
         help="Crypto asset for pair trading (btc, eth, sol, xrp). Skips interactive menu.",
@@ -645,6 +649,10 @@ Examples:
         "--timeframe", type=str, default=None,
         choices=["5m", "15m", "1h"],
         help="Timeframe for pair trading (5m, 15m, 1h). Skips interactive menu.",
+    )
+    parser.add_argument(
+        "--max-loss", type=float, default=None,
+        help="Kill switch: stop trading after losing this many dollars (e.g. --max-loss 50)",
     )
     return parser.parse_args()
 
@@ -989,6 +997,20 @@ async def main():
         await run_btc5m(args)
         return
 
+    # L2 order book recorder — observe and log, no trading
+    if args.record:
+        from execution.book_recorder import BookRecorder
+        from execution.market_spec import make_market_spec
+
+        spec = make_market_spec(args.asset or "btc", args.timeframe or "1h")
+        recorder = BookRecorder(spec=spec)
+
+        import signal
+        signal.signal(signal.SIGINT, lambda s, f: recorder.request_stop())
+
+        await recorder.run()
+        return
+
     # Headless multi-runner: all 3 BTC timeframes simultaneously, no dashboard
     if args.headless:
         from execution.pair_runner import PairRunner
@@ -1011,7 +1033,7 @@ async def main():
         runners = []
         for tf in timeframes:
             spec = make_market_spec(asset, tf)
-            runner = PairRunner(mode=mode, spec=spec, headless=True)
+            runner = PairRunner(mode=mode, spec=spec, headless=True, max_loss=args.max_loss)
             runners.append(runner)
             console.print(f"  [#00FF41]●[/#00FF41] {asset.upper()}/{tf} runner created")
 
@@ -1060,7 +1082,7 @@ async def main():
             mode = args.mode
         else:
             spec, mode = select_pair_market()
-        runner = PairRunner(mode=mode, spec=spec)
+        runner = PairRunner(mode=mode, spec=spec, max_loss=args.max_loss)
         await runner.run()
         return
 

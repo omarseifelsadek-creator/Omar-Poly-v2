@@ -190,6 +190,28 @@ if len(all_dates) >= 2:
 else:
     date_range = (all_dates[0], all_dates[0]) if all_dates else None
 
+# Timeframe filter (extract from market column)
+def _extract_tf(market_str):
+    if pd.isna(market_str):
+        return "Unknown"
+    s = str(market_str)
+    if "15m" in s:
+        return "15m"
+    elif "1h" in s:
+        return "1h"
+    elif "5m" in s:
+        return "5m"
+    return "Other"
+
+tf_options = ["ALL"]
+for df_raw in [windows_raw, buys_raw]:
+    if not df_raw.empty and "market" in df_raw.columns:
+        tfs = df_raw["market"].apply(_extract_tf).unique().tolist()
+        for t in tfs:
+            if t not in tf_options:
+                tf_options.append(t)
+tf_filter = st.sidebar.selectbox("Timeframe", tf_options)
+
 # Mode filter
 modes = ["ALL"]
 if not buys_raw.empty and "mode" in buys_raw.columns:
@@ -203,6 +225,12 @@ windows = windows_raw.copy()
 if date_range and isinstance(date_range, tuple) and len(date_range) == 2:
     buys = buys[(buys["date"] >= date_range[0]) & (buys["date"] <= date_range[1])]
     windows = windows[(windows["date"] >= date_range[0]) & (windows["date"] <= date_range[1])]
+
+if tf_filter != "ALL":
+    if not buys.empty and "market" in buys.columns:
+        buys = buys[buys["market"].apply(_extract_tf) == tf_filter]
+    if not windows.empty and "market" in windows.columns:
+        windows = windows[windows["market"].apply(_extract_tf) == tf_filter]
 
 if mode_filter != "ALL":
     buys = buys[buys["mode"] == mode_filter]

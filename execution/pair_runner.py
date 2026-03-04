@@ -139,10 +139,12 @@ class PairRunner:
     Supports any asset/timeframe via MarketSpec.
     """
 
-    def __init__(self, mode: str = "paper", spec: MarketSpec = None, headless: bool = False):
+    def __init__(self, mode: str = "paper", spec: MarketSpec = None, headless: bool = False,
+                 max_loss: float = None):
         self.mode = mode
         self.spec = spec or make_market_spec("btc", "5m")
         self.headless = headless
+        self.max_loss = max_loss  # Kill switch: stop after losing this much
 
         # Two separate order books
         self.yes_book = OrderBook()
@@ -320,6 +322,15 @@ class PairRunner:
             report_interval = 12 if self.spec.timeframe == "5m" else 1
             if self.windows_traded > 0 and self.windows_traded % report_interval == 0:
                 self._auto_report()
+
+            # Kill switch: stop if cumulative loss exceeds max_loss
+            if self.max_loss and self.cumulative_pnl <= -self.max_loss:
+                self._chainlink.stop()
+                console.print(
+                    f"\n[bold red]  KILL SWITCH — Lost ${abs(self.cumulative_pnl):.2f} "
+                    f"(limit: ${self.max_loss:.0f}). Stopping.[/bold red]"
+                )
+                break
 
             # Graceful stop: Ctrl+C was pressed — exit after settlement
             if self._stop_requested:
