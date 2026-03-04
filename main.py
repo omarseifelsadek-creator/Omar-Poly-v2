@@ -633,6 +633,10 @@ Examples:
         help="Pair trading mode: accumulate YES+NO pairs for guaranteed profit",
     )
     parser.add_argument(
+        "--headless", action="store_true",
+        help="No dashboard — run all 4 BTC timeframes simultaneously, log to CSV only",
+    )
+    parser.add_argument(
         "--asset", type=str, default=None,
         choices=["btc", "eth", "sol", "xrp"],
         help="Crypto asset for pair trading (btc, eth, sol, xrp). Skips interactive menu.",
@@ -984,6 +988,36 @@ async def main():
     # BTC 5-minute auto-rotating mode
     if args.btc5m:
         await run_btc5m(args)
+        return
+
+    # Headless multi-runner: all 4 BTC timeframes simultaneously, no dashboard
+    if args.headless:
+        from execution.pair_runner import PairRunner
+        from execution.market_spec import make_market_spec
+
+        asset = args.asset or "btc"
+        mode = args.mode
+        timeframes = ["5m", "15m", "1h", "4h"]
+
+        if args.timeframe:
+            # Single headless runner for specific timeframe
+            timeframes = [args.timeframe]
+
+        console.print(f"\n[bold #00FFFF]═══ HEADLESS MODE ═══[/bold #00FFFF]")
+        console.print(f"  Asset: [bold]{asset.upper()}[/bold]  Timeframes: {', '.join(timeframes)}")
+        console.print(f"  Mode: [bold]{mode}[/bold]  Runners: {len(timeframes)}")
+        console.print(f"  Logging to: data/logs/")
+        console.print(f"  [dim]Press Ctrl+C to stop all runners[/dim]\n")
+
+        runners = []
+        for tf in timeframes:
+            spec = make_market_spec(asset, tf)
+            runner = PairRunner(mode=mode, spec=spec, headless=True)
+            runners.append(runner)
+            console.print(f"  [#00FF41]●[/#00FF41] {asset.upper()}/{tf} runner created")
+
+        console.print()
+        await asyncio.gather(*(r.run() for r in runners))
         return
 
     # Pair trading mode

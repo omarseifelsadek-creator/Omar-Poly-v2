@@ -139,9 +139,10 @@ class PairRunner:
     Supports any asset/timeframe via MarketSpec.
     """
 
-    def __init__(self, mode: str = "paper", spec: MarketSpec = None):
+    def __init__(self, mode: str = "paper", spec: MarketSpec = None, headless: bool = False):
         self.mode = mode
         self.spec = spec or make_market_spec("btc", "5m")
+        self.headless = headless
 
         # Two separate order books
         self.yes_book = OrderBook()
@@ -366,15 +367,18 @@ class PairRunner:
         uri = settings.CLOB_WS_URL
         reconnect_count = 0
 
-        # Start dashboard ONCE for the entire window
-        try:
-            self._dashboard.start()
-            self._live = True
-        except Exception as e:
-            import sys, traceback as tb_mod
-            sys.stdout.write(f"\033[91m═══ DASHBOARD START CRASH ═══\n{tb_mod.format_exc()}\033[0m\n")
-            sys.stdout.flush()
+        # Start dashboard ONCE for the entire window (skip in headless mode)
+        if self.headless:
             self._live = False
+        else:
+            try:
+                self._dashboard.start()
+                self._live = True
+            except Exception as e:
+                import sys, traceback as tb_mod
+                sys.stdout.write(f"\033[91m═══ DASHBOARD START CRASH ═══\n{tb_mod.format_exc()}\033[0m\n")
+                sys.stdout.flush()
+                self._live = False
 
         # Start UI + watchdog tasks that persist across WS reconnects
         ui_task = asyncio.create_task(self._ui_loop())
@@ -804,7 +808,8 @@ class PairRunner:
                     await asyncio.sleep(3)
                     break
 
-        # Text fallback (also reached if dashboard crashes above)
+        # Text fallback (also reached if dashboard crashes above, or headless)
+        tag = f"[{self.spec.asset.upper()}/{self.spec.timeframe}]" if self.headless else ""
         while self._running:
             await asyncio.sleep(3)
             if not self._running:
@@ -812,7 +817,7 @@ class PairRunner:
             try:
                 stats = self.engine.get_stats()
                 console.print(
-                    f"  [dim]T-{stats['time_remaining']:.0f}s[/dim] | "
+                    f"  {tag} [dim]T-{stats['time_remaining']:.0f}s[/dim] | "
                     f"Pairs: {stats['matched_pairs']:.0f} | "
                     f"PairCost: ${stats['pair_cost']:.4f} | "
                     f"Msgs: {self._msg_count}"
