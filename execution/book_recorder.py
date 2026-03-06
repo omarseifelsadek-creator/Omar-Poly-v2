@@ -4,6 +4,12 @@ book_recorder.py — L2 order book data recorder for backtesting.
 Records order book snapshots and trades to CSV without trading.
 Piggybacks on the same WebSocket feed the bot uses.
 
+Upgrades:
+  - Snapshot on every trade event (+ 30s periodic fallback)
+  - Latency tracking: local_ms vs server timestamp_ms
+  - BTC oracle price from Chainlink WS on every snapshot/trade
+  - Fee rate metadata per window
+
 Usage:
     python3 main.py --record --asset btc --timeframe 1h
 """
@@ -27,13 +33,16 @@ from data.models import BookSnapshot, PriceChangeEvent, TradeEvent
 from state.orderbook import OrderBook
 from execution.market_spec import MarketSpec, make_market_spec
 from execution.market_rotator import MarketRotator, MarketWindow
+from execution.pair_strategy import polymarket_taker_fee
 
 logger = logging.getLogger(__name__)
 console = Console()
 
 LOG_DIR = "data/logs"
-SNAPSHOT_INTERVAL = 30  # seconds between L2 snapshots
+SNAPSHOT_INTERVAL = 30  # seconds between periodic L2 snapshots
 BOOK_DEPTH = 10         # top N levels per side
+
+CHAINLINK_WS = "wss://ws-live-data.polymarket.com"
 
 
 def _ensure_dir():
@@ -79,14 +88,65 @@ class _CSVWriter:
 
 SNAPSHOT_HEADER = [
     "timestamp_ms", "market_slug", "token", "side", "level", "price", "size",
+    "btc_price", "trigger",
 ]
 TRADE_HEADER = [
-    "timestamp_ms", "market_slug", "token", "side", "price", "size",
+    "timestamp_ms", "local_ms", "latency_ms",
+    "market_slug", "token", "side", "price", "size", "btc_price",
 ]
 WINDOW_HEADER = [
     "timestamp", "market_slug", "timeframe", "start_ts", "end_ts",
-    "up_token_id", "down_token_id",
+    "up_token_id", "down_token_id", "fee_rate_bps_at_50c",
 ]
+
+
+class _ChainlinkTracker:
+    """Lightweight BTC price tracker for the recorder."""
+
+    def __init__(self, symbol: str = "btc/usd"):
+        self.symbol = symbol
+        self.latest_price: float | None = None
+        self._running = False
+        self._task: asyncio.Task | None = None
+
+    def start(self):
+        self._running = True
+        self._task = asyncio.create_task(self._ws_loop())
+
+    def stop(self):
+        self._running = False
+        if self._task and not self._task.done():
+            self._task.cancel()
+
+    async def _ws_loop(self):
+        while self._running:
+            try:
+                async with websockets.connect(
+                    CHAINLINK_WS, ping_interval=30, ping_timeout=10,
+                ) as ws:
+                    await ws.send(json.dumps({
+                        "action": "subscribe",
+                        "subscriptions": [{
+                            "topic": "crypto_prices_chainlink",
+                            "type": "*",
+                            "filters": json.dumps({"symbol": self.symbol}),
+                        }],
+                    }))
+                    async for raw in ws:
+                        if not self._running:
+                            break
+                        try:
+                            msg = json.loads(raw)
+                            price = msg.get("payload", {}).get("value")
+                            if price is not None:
+                                self.latest_price = float(price)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                if self._running:
+                    await asyncio.sleep(3)
 
 
 class BookRecorder:
@@ -99,21 +159,25 @@ class BookRecorder:
         self._snap_writer = _CSVWriter("l2_snapshots", SNAPSHOT_HEADER)
         self._trade_writer = _CSVWriter("l2_trades", TRADE_HEADER)
         self._window_writer = _CSVWriter("l2_windows", WINDOW_HEADER)
-        self._last_snapshot_time = 0.0
+        self._last_periodic_snap = 0.0
         self._stop = False
         self._msg_count = 0
         self._snap_count = 0
         self._trade_count = 0
         self._windows_recorded = 0
+        self._oracle = _ChainlinkTracker()
 
     def request_stop(self):
         self._stop = True
 
     async def run(self):
         console.print(f"\n[bold cyan]  L2 RECORDER — {self.spec.display_name}[/bold cyan]")
-        console.print(f"  Snapshot interval: {SNAPSHOT_INTERVAL}s | Depth: {BOOK_DEPTH} levels")
+        console.print(f"  Snapshot interval: {SNAPSHOT_INTERVAL}s + on-trade | Depth: {BOOK_DEPTH} levels")
+        console.print(f"  Oracle: Chainlink BTC/USD | Latency: server vs local")
         console.print(f"  Output: {LOG_DIR}/l2_*.csv")
         console.print(f"  [dim]Press Ctrl+C to stop[/dim]\n")
+
+        self._oracle.start()
 
         rotator = MarketRotator(spec=self.spec, token_side="auto")
         window = await rotator.start()
@@ -128,6 +192,7 @@ class BookRecorder:
 
         if not window:
             console.print("[red]  No market found. Check connection.[/red]")
+            self._oracle.stop()
             return
 
         try:
@@ -161,6 +226,7 @@ class BookRecorder:
                         break
         finally:
             self._close()
+            self._oracle.stop()
             await rotator.stop()
             console.print(f"\n[bold cyan]  Recording stopped.[/bold cyan]")
             console.print(f"  Windows: {self._windows_recorded} | Snapshots: {self._snap_count} | Trades: {self._trade_count}")
@@ -172,20 +238,25 @@ class BookRecorder:
         slug = window.slug
 
         console.print(f"  [green]Recording:[/green] {window.question}")
-        console.print(f"  [dim]{window.seconds_remaining:.0f}s remaining[/dim]")
+        rem = window.seconds_remaining
+        t_str = f"{rem/60:.1f}m" if rem >= 120 else f"{rem:.0f}s"
+        console.print(f"  [dim]{t_str} remaining[/dim]")
 
-        # Log window metadata
+        # Fee rate at 50c (peak fee) in basis points
+        fee_at_50c = polymarket_taker_fee(0.50)
+        fee_bps = round(fee_at_50c * 10000, 1)
+
         self._window_writer.write([
             time.strftime("%Y-%m-%d %H:%M:%S"),
             slug, self.spec.timeframe,
             window.start_ts, window.end_ts,
-            yes_id, no_id,
+            yes_id, no_id, fee_bps,
         ])
 
         # Reset books
         self.yes_book = OrderBook()
         self.no_book = OrderBook()
-        self._last_snapshot_time = 0.0
+        self._last_periodic_snap = 0.0
 
         uri = settings.CLOB_WS_URL
         reconnect_count = 0
@@ -205,6 +276,7 @@ class BookRecorder:
                             break
 
                         self._msg_count += 1
+                        local_ms = int(time.time() * 1000)
 
                         for parsed in parse_messages(raw):
                             asset_id = getattr(parsed, "asset_id", "")
@@ -214,7 +286,7 @@ class BookRecorder:
                                     self.yes_book.apply_snapshot(parsed)
                                 elif asset_id == no_id:
                                     self.no_book.apply_snapshot(parsed)
-                                self._maybe_log_snapshot(slug, yes_id, no_id)
+                                self._maybe_periodic_snapshot(slug, "periodic")
 
                             elif isinstance(parsed, PriceChangeEvent):
                                 has_yes = any(c.asset_id == yes_id for c in parsed.price_changes)
@@ -223,15 +295,24 @@ class BookRecorder:
                                     self.yes_book.apply_price_change(parsed)
                                 if has_no:
                                     self.no_book.apply_price_change(parsed)
-                                self._maybe_log_snapshot(slug, yes_id, no_id)
+                                self._maybe_periodic_snapshot(slug, "periodic")
 
                             elif isinstance(parsed, TradeEvent):
                                 token_label = "YES" if asset_id == yes_id else "NO"
+                                server_ms = parsed.timestamp_ms
+                                latency_ms = local_ms - server_ms if server_ms else 0
+                                btc = self._oracle.latest_price or 0
+
                                 self._trade_writer.write([
-                                    parsed.timestamp_ms, slug, token_label,
+                                    server_ms, local_ms, latency_ms,
+                                    slug, token_label,
                                     parsed.side.value, parsed.price, parsed.size,
+                                    btc,
                                 ])
                                 self._trade_count += 1
+
+                                # Snapshot on trade
+                                self._log_snapshot(slug, "trade")
 
             except ConnectionClosed:
                 reconnect_count += 1
@@ -251,22 +332,29 @@ class BookRecorder:
 
         console.print(f"  [dim]Window done — {self._snap_count} snapshots, {self._trade_count} trades total[/dim]")
 
-    def _maybe_log_snapshot(self, slug: str, yes_id: str, no_id: str):
-        """Write L2 snapshot if enough time has passed."""
+    def _maybe_periodic_snapshot(self, slug: str, trigger: str):
+        """Write L2 snapshot if 30s have passed since last periodic."""
         now = time.time()
-        if now - self._last_snapshot_time < SNAPSHOT_INTERVAL:
+        if now - self._last_periodic_snap < SNAPSHOT_INTERVAL:
             return
-        self._last_snapshot_time = now
-        ts_ms = int(now * 1000)
+        self._last_periodic_snap = now
+        self._log_snapshot(slug, trigger)
+
+    def _log_snapshot(self, slug: str, trigger: str):
+        """Write full L2 book state to CSV."""
+        ts_ms = int(time.time() * 1000)
+        btc = self._oracle.latest_price or 0
 
         for token_label, book in [("YES", self.yes_book), ("NO", self.no_book)]:
             for i, level in enumerate(book.get_sorted_bids(BOOK_DEPTH)):
                 self._snap_writer.write([
                     ts_ms, slug, token_label, "BID", i + 1, level.price, level.size,
+                    btc, trigger,
                 ])
             for i, level in enumerate(book.get_sorted_asks(BOOK_DEPTH)):
                 self._snap_writer.write([
                     ts_ms, slug, token_label, "ASK", i + 1, level.price, level.size,
+                    btc, trigger,
                 ])
 
         self._snap_count += 1

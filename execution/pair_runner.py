@@ -188,6 +188,7 @@ class PairRunner:
         self._running = False
         self._connected = False
         self._msg_count = 0
+        self._filter_log_times: dict = {}  # throttle filter CSV logging
 
         # Cumulative stats across windows
         self.cumulative_pnl: float = 0.0
@@ -290,6 +291,7 @@ class PairRunner:
             self.yes_metrics = None
             self.no_metrics = None
             self._msg_count = 0
+            self._filter_log_times = {}
             self._live_fills = []
             self._capital_exhausted_time = None
             self._max_unhedged_exposure = 0.0
@@ -611,7 +613,7 @@ class PairRunner:
                 f"YES asks={[(l.price, l.size) for l in yes_asks_top]} | "
                 f"NO asks={[(l.price, l.size) for l in no_asks_top]} | "
                 f"pair_cost=${(yes_ask or 0)+(no_ask or 0):.4f} | "
-                f"T-{self.engine.time_remaining:.0f}s | msgs={self._msg_count}"
+                f"T-{self.engine.time_remaining/60:.1f}m | msgs={self._msg_count}"
             )
 
         if not yes_ask or not no_ask:
@@ -656,7 +658,8 @@ class PairRunner:
             has_sweep = True
             sweep_side = "NO"
 
-        # Cap unmatched exposure at $30 — prevent runaway one-sided positions
+        # Cap unmatched exposure — prevent runaway one-sided positions
+        # TEMP: $10 for live test (was $30)
         unmatched_usd = abs(self.engine.yes_cost - self.engine.no_cost)
         if unmatched_usd > 30.0:
             return
@@ -682,27 +685,32 @@ class PairRunner:
         )
 
         if not action:
-            # Log strategy filter event
+            # Log strategy filter event (throttled: once per 10s per reason)
             if self.engine.last_filter_reason:
-                market_label = (
-                    f"{self.spec.display_name_long} — {self.window.time_label}"
-                    if self.window else self.spec.display_name
-                )
-                t_rem = self.engine.time_remaining
-                if t_rem < self.engine.config.panic_time_seconds:
-                    fzone = "Panic"
-                elif min(yes_ask, no_ask) <= 0.35:
-                    fzone = "Sniper"
-                elif min(yes_ask, no_ask) <= 0.44:
-                    fzone = "Value"
-                else:
-                    fzone = "Dead"
-                log_pair_filter(market_label, self.engine.last_filter_reason,
-                                self.engine.last_filter_value,
-                                self.engine.last_filter_threshold,
-                                {"yes_ask": yes_ask, "no_ask": no_ask,
-                                 "yes_bid": yes_bid or 0,
-                                 "time_remaining": t_rem, "zone": fzone})
+                now = time.time()
+                reason = self.engine.last_filter_reason
+                last_t = self._filter_log_times.get(reason, 0)
+                if now - last_t >= 10.0:
+                    self._filter_log_times[reason] = now
+                    market_label = (
+                        f"{self.spec.display_name_long} — {self.window.time_label}"
+                        if self.window else self.spec.display_name
+                    )
+                    t_rem = self.engine.time_remaining
+                    if t_rem < self.engine.config.panic_time_seconds:
+                        fzone = "Panic"
+                    elif min(yes_ask, no_ask) <= 0.35:
+                        fzone = "Sniper"
+                    elif min(yes_ask, no_ask) <= 0.44:
+                        fzone = "Value"
+                    else:
+                        fzone = "Dead"
+                    log_pair_filter(market_label, self.engine.last_filter_reason,
+                                    self.engine.last_filter_value,
+                                    self.engine.last_filter_threshold,
+                                    {"yes_ask": yes_ask, "no_ask": no_ask,
+                                     "yes_bid": yes_bid or 0,
+                                     "time_remaining": t_rem, "zone": fzone})
             return
 
         # Resolve the token ID for this leg (YES or NO side)
@@ -925,8 +933,10 @@ class PairRunner:
                 break
             try:
                 stats = self.engine.get_stats()
+                tr = stats['time_remaining']
+                t_str = f"{tr/60:.1f}m" if tr >= 120 else f"{tr:.0f}s"
                 console.print(
-                    f"  {tag} [dim]T-{stats['time_remaining']:.0f}s[/dim] | "
+                    f"  {tag} [dim]T-{t_str}[/dim] | "
                     f"Pairs: {stats['matched_pairs']:.0f} | "
                     f"PairCost: ${stats['pair_cost']:.4f} | "
                     f"Msgs: {self._msg_count}"

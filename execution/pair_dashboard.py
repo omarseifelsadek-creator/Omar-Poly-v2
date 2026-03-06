@@ -198,7 +198,8 @@ class PairDashboard:
         tx.append(s.get("market", ""), style="bold cyan")
         tx.append(f"  W#{s.get('wn',0)}", style="dim")
         tx.append("  T-", style="dim")
-        tx.append(f"{t_rem:.0f}s", style=tc)
+        t_str = f"{t_rem/60:.1f}m" if t_rem >= 120 else f"{t_rem:.0f}s"
+        tx.append(t_str, style=tc)
         tx.append(f"  Msgs:{s.get('msgs',0):,}", style="dim")
         tx.append("  Lag:", style="dim")
         tx.append(f"{lag:.0f}ms", style=lc)
