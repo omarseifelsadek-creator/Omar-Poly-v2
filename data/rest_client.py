@@ -14,11 +14,12 @@ We use `httpx` instead of `requests` because httpx supports async,
 which means our program can do other things while waiting for the API response.
 """
 
+import asyncio
+import logging
 import re
+from typing import Optional
 
 import httpx
-import logging
-from typing import Optional
 
 from config import settings
 from data.models import BookSnapshot, OrderLevel
@@ -56,54 +57,59 @@ class RestClient:
         """
         Search for markets by keyword.
 
-        Uses two strategies in parallel for comprehensive results:
-        1. Fetch markets from the Gamma API across multiple pages and filter by keyword
-        2. Search events by tag and extract their child markets
+        Three strategies run to maximise coverage:
+        1. Paginated market fetch (sequential — needs prior page size to decide next)
+        2. Event tag search (concurrent with strategy 3)
+        3. Event title search — catches terms that differ from question text
+           (e.g., "oscars" vs "Academy Awards"). The Gamma API has no server-side
+           title filter, so we fetch top events by volume and filter client-side.
 
         Args:
             query: Search term (e.g., "bitcoin", "election", "AI")
             limit: Maximum number of results
 
         Returns:
-            List of market dictionaries with keys like:
-            - question: "Will Bitcoin hit $100k?"
-            - clobTokenIds: ["<YES_token>", "<NO_token>"]
-            - slug: "will-bitcoin-hit-100k"
-            - volume: "1234567.89"
-            - active: True/False
+            List of market dicts sorted by 24hr volume descending.
         """
         query_lower = query.lower()
-        seen_ids = set()
-        results = []
+        seen_ids: set[str] = set()
+        results: list[dict] = []
 
-        # Use word boundary matching for short queries to avoid
+        # Word boundary matching for short queries to avoid
         # substring false positives (e.g., "AI" matching "Trail")
-        if len(query_lower) <= 3:
-            query_pattern = re.compile(rf"\b{re.escape(query_lower)}\b", re.IGNORECASE)
-        else:
-            query_pattern = None
+        query_pattern = (
+            re.compile(rf"\b{re.escape(query_lower)}\b", re.IGNORECASE)
+            if len(query_lower) <= 3
+            else None
+        )
 
-        def _matches(m: dict) -> bool:
-            question = m.get("question", "")
+        def _text_matches(text: str) -> bool:
             if query_pattern:
-                text_match = query_pattern.search(question) is not None
-            else:
-                text_match = query_lower in question.lower()
-            return (
-                text_match
-                and m.get("clobTokenIds")
-                and not m.get("closed", False)
-            )
+                return query_pattern.search(text) is not None
+            return query_lower in text.lower()
 
-        def _add_unique(markets: list[dict]) -> None:
+        def _is_tradeable(m: dict) -> bool:
+            return bool(m.get("clobTokenIds")) and not m.get("closed", False)
+
+        def _collect(markets: list[dict], require_question_match: bool = True) -> None:
+            """Add markets to results, deduplicating by id."""
             for m in markets:
-                mid = m.get("id") or m.get("question", "")
-                if mid not in seen_ids and _matches(m):
-                    seen_ids.add(mid)
-                    results.append(m)
+                mid = m.get("id")
+                if mid is None:
+                    mid = m.get("question")
+                if not mid:
+                    continue
+                if mid in seen_ids:
+                    continue
+                if not _is_tradeable(m):
+                    continue
+                if require_question_match and not _text_matches(m.get("question", "")):
+                    continue
+                seen_ids.add(mid)
+                results.append(m)
 
+        # ── Strategy 1: Paginated markets sorted by volume ──
         try:
-            # Strategy 1: Fetch multiple pages of markets sorted by volume
             page_size = 100
             for offset in range(0, 500, page_size):
                 resp = await self._client.get(
@@ -119,67 +125,68 @@ class RestClient:
                 )
                 resp.raise_for_status()
                 page = resp.json()
-                _add_unique(page)
+                if not isinstance(page, list):
+                    logger.error("Unexpected response format from /markets: %r", type(page))
+                    break
+                _collect(page)
 
-                # Stop paging if we got fewer results than requested
-                # or already have enough matches
-                if len(page) < page_size or len(results) >= limit:
+                if len(page) < page_size:
                     break
 
         except httpx.HTTPError as e:
-            logger.error(f"Failed to search markets (pages): {e}")
+            logger.error("Failed to search markets (pages): %s", e)
 
-        try:
-            # Strategy 2: Search events by tag for broader coverage
-            resp = await self._client.get(
-                f"{settings.GAMMA_API_URL}/events",
-                params={
-                    "tag": query_lower,
-                    "limit": 20,
-                    "active": "true",
-                    "closed": "false",
-                },
-            )
-            resp.raise_for_status()
-            events = resp.json()
-            for event in events:
-                for m in event.get("markets", []):
-                    _add_unique([m])
+        # ── Strategies 2 & 3: Event searches (run concurrently) ──
+        async def _search_events_by_tag() -> list[dict]:
+            try:
+                resp = await self._client.get(
+                    f"{settings.GAMMA_API_URL}/events",
+                    params={
+                        "tag": query_lower,
+                        "limit": 20,
+                        "active": "true",
+                        "closed": "false",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return data if isinstance(data, list) else []
+            except httpx.HTTPError as e:
+                logger.error("Failed to search events by tag: %s", e)
+                return []
 
-        except httpx.HTTPError as e:
-            logger.error(f"Failed to search events by tag: {e}")
+        async def _search_events_by_volume() -> list[dict]:
+            try:
+                resp = await self._client.get(
+                    f"{settings.GAMMA_API_URL}/events",
+                    params={
+                        "limit": 100,
+                        "active": "true",
+                        "closed": "false",
+                        "order": "volume24hr",
+                        "ascending": "false",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return data if isinstance(data, list) else []
+            except httpx.HTTPError as e:
+                logger.error("Failed to search events by title: %s", e)
+                return []
 
-        try:
-            # Strategy 3: Search events by title for terms that differ
-            # from market questions (e.g., "oscars" vs "Academy Awards")
-            resp = await self._client.get(
-                f"{settings.GAMMA_API_URL}/events",
-                params={
-                    "limit": 100,
-                    "active": "true",
-                    "closed": "false",
-                    "order": "volume24hr",
-                    "ascending": "false",
-                },
-            )
-            resp.raise_for_status()
-            events = resp.json()
-            for event in events:
-                title = event.get("title", "")
-                if query_pattern:
-                    title_match = query_pattern.search(title) is not None
-                else:
-                    title_match = query_lower in title.lower()
-                if not title_match:
-                    continue
-                for m in event.get("markets", []):
-                    mid = m.get("id") or m.get("question", "")
-                    if mid not in seen_ids and m.get("clobTokenIds") and not m.get("closed", False):
-                        seen_ids.add(mid)
-                        results.append(m)
+        tag_events, vol_events = await asyncio.gather(
+            _search_events_by_tag(),
+            _search_events_by_volume(),
+        )
 
-        except httpx.HTTPError as e:
-            logger.error(f"Failed to search events by title: {e}")
+        # Strategy 2: Match child markets by question text
+        for event in tag_events:
+            _collect(event.get("markets", []))
+
+        # Strategy 3: Match by event title, include all child markets
+        for event in vol_events:
+            if _text_matches(event.get("title", "")):
+                _collect(event.get("markets", []), require_question_match=False)
 
         # Sort by 24hr volume descending
         results.sort(
