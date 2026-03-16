@@ -1,0 +1,131 @@
+# OBI — Polymarket Order Book Intelligence
+
+Async Python trading bot for prediction markets. Real-time order book analysis
+via WebSocket, multi-phase signal generation, paper/dry-run/live execution.
+
+## How to Run
+
+```bash
+source env/bin/activate
+
+# Interactive market selector
+python main.py
+
+# Direct market connection
+python main.py --token <TOKEN_ID>
+python main.py --slug <market-slug>
+python main.py --search "keyword"
+
+# BTC 5-minute auto-rotating
+python main.py --btc5m [--btc5m-side auto|up|down]
+
+# Pair trading (YES+NO accumulation)
+python main.py --pairs [--asset btc|eth|sol|xrp] [--timeframe 5m|15m|1h]
+
+# Headless (no dashboard, CSV logging only, all 3 BTC timeframes)
+python main.py --headless
+
+# Record L2 snapshots for backtesting
+python main.py --record
+
+# Trading mode (default: paper)
+python main.py --mode paper|dry-run|live
+
+# Kill switch
+python main.py --max-loss 50
+```
+
+## Data Pipeline
+
+```
+WebSocket msg
+  -> message_parser
+  -> OrderBook + LevelTracker (state/)
+  -> compute_all_metrics + MomentumEngine (analytics/metrics.py)
+  -> generate_insights (analytics/interpreter.py)
+  -> generate_signals (analytics/signals.py)
+  -> StrategyEngine.evaluate (execution/strategy.py)
+  -> UI (ui/terminal.py) + Telegram + CSV + SQLite
+```
+
+## Module Map
+
+| Directory       | Responsibility                                             |
+|-----------------|------------------------------------------------------------|
+| `config/`       | `settings.py` (static thresholds), `strategy.conf` (hot-reloadable trading params), `live_config.py` (conf loader) |
+| `data/`         | `models.py` (Pydantic models), `rest_client.py` (Gamma/CLOB HTTP), `websocket_client.py` (WS stream), `message_parser.py` |
+| `state/`        | `orderbook.py` (bid/ask state + trade history), `level_tracker.py` (per-level time-series for Phase 2) |
+| `analytics/`    | `metrics.py` (Phase 1-3 computation), `detectors.py` (spoofing/absorption/sweep), `momentum.py` (EMA/regime), `interpreter.py` (insights), `signals.py` (trade signals) |
+| `execution/`    | `strategy.py` (signal evaluation + position management), `executor.py` (order placement), `market_rotator.py` (side switching), `pair_*.py` (pair trading), `trade_logger.py` |
+| `ui/`           | `terminal.py` (Rich dashboard)                            |
+| `telegram/`     | `telegram_bot.py` (alert notifications)                    |
+| `storage/`      | `database.py` (async SQLite via queue)                     |
+| `research/`     | Research CLI and backtesting tools                         |
+
+## Key Design Patterns
+
+- **Analytics = pure functions**: metrics/detectors take state, return results, no side effects
+- **Pydantic for external data** (API responses), **dataclasses for internal mutable state** (OrderBook)
+- **Signal/insight dedup**: `_should_emit(key, cooldown)` pattern — module-level state, resets on restart
+- **Two config systems**:
+  - `config/settings.py` — static thresholds, requires restart
+  - `config/strategy.conf` — INI format, hot-reloadable (sizing, risk, strategy toggles)
+- **All magic numbers** live in `config/settings.py`
+- **Async everywhere** — never block the event loop
+- **Background DB writes** via asyncio queue
+
+## The Metrics Object
+
+Central data structure flowing through the entire pipeline (`analytics/metrics.py` -> `data/models.py`).
+
+**Field groups**:
+- **Order book**: OBI (0-1), VWAP midpoint, spread, best bid/ask
+- **Imbalance**: bid/ask depth ratio, depth at N levels
+- **Flow**: buy/sell volume (120s rolling), flow pressure (-1 to +1)
+- **Detections**: walls (WallInfo[]), whales (WhaleEvent[]), spoofing, absorption, sweeps
+- **Momentum** (Phase 3): price/OBI/flow EMA + velocity, depth divergence
+- **Regime**: TRENDING_UP/DOWN, RANGING, VOLATILE, BREAKOUT, QUIET + confidence
+- **Composite**: sentiment_v3 (-1 to +1), blending all phases with configurable weights
+
+## Three-Phase Analytics
+
+1. **Phase 1 — Snapshots**: OBI, walls, whales, flow pressure, base sentiment
+2. **Phase 2 — Time-series patterns**: Spoofing (oscillations), Absorption (wall holding), Sweeps (level consumption)
+3. **Phase 3 — Momentum & Regime**: EMA smoothing, volatility tracking, market regime detection with hysteresis
+
+## External APIs
+
+| API           | Base URL                               | Auth | Purpose              |
+|---------------|----------------------------------------|------|----------------------|
+| Gamma API     | `https://gamma-api.polymarket.com`     | None | Market discovery     |
+| CLOB REST     | `https://clob.polymarket.com`          | None | Order book polling   |
+| CLOB WebSocket| `wss://ws-subscriptions-clob.polymarket.com/ws/market` | None | Real-time book stream |
+| Telegram      | Bot API                                | Token| Alert notifications  |
+
+**Gamma API caveat**: No reliable server-side text search. `_q`, `question_contains`, `title_contains` params don't actually filter. Client-side filtering required.
+
+## Environment Variables
+
+- `OBI_TELEGRAM_TOKEN` — Telegram bot token (optional)
+- `OBI_TELEGRAM_CHAT_ID` — Telegram chat ID (optional)
+- No auth needed for read-only market data APIs
+
+## Common Tasks
+
+| Task                    | Where to change                                              |
+|-------------------------|--------------------------------------------------------------|
+| New detection pattern   | `analytics/detectors.py` -> add to `data/models.py` -> wire in `analytics/metrics.py` -> interpret in `analytics/interpreter.py` -> signal in `analytics/signals.py` |
+| New metric              | `data/models.py` (add field) -> `analytics/metrics.py` (compute) -> `ui/terminal.py` (display) |
+| Strategy behavior       | `config/strategy.conf` (hot) or `execution/strategy.py` (code) |
+| New CLI mode            | `parse_args()` in `main.py` + new `async run_*()` function  |
+| Tune sensitivity        | `config/settings.py` (thresholds section)                    |
+| New asset for pairs     | `execution/pair_runner.py` (add slug pattern)                |
+
+## Critical Warnings
+
+- **NEVER** use `--mode live` without paper testing first
+- **Polymarket fee curve**: `price * (1 - price) * 0.0625` (~3.12% round-trip at 50c)
+- **WebSocket reconnection** uses exponential backoff — don't add aggressive retries
+- **Signal/insight dedup** is module-level state: persists within session, resets on restart
+- **No tests exist yet** — analytics pure functions are the ideal starting point for TDD
+- **strategy.conf** is read by `LiveConfig` at runtime — invalid INI will crash the config loader
