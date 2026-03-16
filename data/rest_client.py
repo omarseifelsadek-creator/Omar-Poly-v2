@@ -14,6 +14,8 @@ We use `httpx` instead of `requests` because httpx supports async,
 which means our program can do other things while waiting for the API response.
 """
 
+import re
+
 import httpx
 import logging
 from typing import Optional
@@ -54,6 +56,10 @@ class RestClient:
         """
         Search for markets by keyword.
 
+        Uses two strategies in parallel for comprehensive results:
+        1. Fetch markets from the Gamma API across multiple pages and filter by keyword
+        2. Search events by tag and extract their child markets
+
         Args:
             query: Search term (e.g., "bitcoin", "election", "AI")
             limit: Maximum number of results
@@ -66,12 +72,88 @@ class RestClient:
             - volume: "1234567.89"
             - active: True/False
         """
+        query_lower = query.lower()
+        seen_ids = set()
+        results = []
+
+        # Use word boundary matching for short queries to avoid
+        # substring false positives (e.g., "AI" matching "Trail")
+        if len(query_lower) <= 3:
+            query_pattern = re.compile(rf"\b{re.escape(query_lower)}\b", re.IGNORECASE)
+        else:
+            query_pattern = None
+
+        def _matches(m: dict) -> bool:
+            question = m.get("question", "")
+            if query_pattern:
+                text_match = query_pattern.search(question) is not None
+            else:
+                text_match = query_lower in question.lower()
+            return (
+                text_match
+                and m.get("clobTokenIds")
+                and not m.get("closed", False)
+            )
+
+        def _add_unique(markets: list[dict]) -> None:
+            for m in markets:
+                mid = m.get("id") or m.get("question", "")
+                if mid not in seen_ids and _matches(m):
+                    seen_ids.add(mid)
+                    results.append(m)
+
         try:
-            # Fetch more results and filter client-side for better coverage
-            # The Gamma API's text search is unreliable, so we fetch by
-            # recency and volume, then filter by keyword ourselves
+            # Strategy 1: Fetch multiple pages of markets sorted by volume
+            page_size = 100
+            for offset in range(0, 500, page_size):
+                resp = await self._client.get(
+                    f"{settings.GAMMA_API_URL}/markets",
+                    params={
+                        "limit": page_size,
+                        "offset": offset,
+                        "active": "true",
+                        "closed": "false",
+                        "order": "volume24hr",
+                        "ascending": "false",
+                    },
+                )
+                resp.raise_for_status()
+                page = resp.json()
+                _add_unique(page)
+
+                # Stop paging if we got fewer results than requested
+                # or already have enough matches
+                if len(page) < page_size or len(results) >= limit:
+                    break
+
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to search markets (pages): {e}")
+
+        try:
+            # Strategy 2: Search events by tag for broader coverage
             resp = await self._client.get(
-                f"{settings.GAMMA_API_URL}/markets",
+                f"{settings.GAMMA_API_URL}/events",
+                params={
+                    "tag": query_lower,
+                    "limit": 20,
+                    "active": "true",
+                    "closed": "false",
+                },
+            )
+            resp.raise_for_status()
+            events = resp.json()
+            for event in events:
+                for m in event.get("markets", []):
+                    _add_unique([m])
+
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to search events by tag: {e}")
+
+        try:
+            # Strategy 3: Search events by title for terms that differ
+            # from market questions (e.g., "oscars" vs "Academy Awards")
+            resp = await self._client.get(
+                f"{settings.GAMMA_API_URL}/events",
                 params={
                     "limit": 100,
                     "active": "true",
@@ -81,21 +163,29 @@ class RestClient:
                 },
             )
             resp.raise_for_status()
-            markets = resp.json()
-
-            # Filter by query (case-insensitive search in question text)
-            query_lower = query.lower()
-            results = [
-                m for m in markets
-                if query_lower in m.get("question", "").lower()
-                and m.get("clobTokenIds")  # Must have trading tokens
-                and not m.get("closed", False)  # Not closed
-            ]
-            return results[:limit]
+            events = resp.json()
+            for event in events:
+                title = event.get("title", "")
+                if query_pattern:
+                    title_match = query_pattern.search(title) is not None
+                else:
+                    title_match = query_lower in title.lower()
+                if not title_match:
+                    continue
+                for m in event.get("markets", []):
+                    mid = m.get("id") or m.get("question", "")
+                    if mid not in seen_ids and m.get("clobTokenIds") and not m.get("closed", False):
+                        seen_ids.add(mid)
+                        results.append(m)
 
         except httpx.HTTPError as e:
-            logger.error(f"Failed to search markets: {e}")
-            return []
+            logger.error(f"Failed to search events by title: {e}")
+
+        # Sort by 24hr volume descending
+        results.sort(
+            key=lambda m: float(m.get("volume24hr", 0) or 0), reverse=True
+        )
+        return results[:limit]
 
     async def get_market_by_slug(self, slug: str) -> Optional[dict]:
         """
