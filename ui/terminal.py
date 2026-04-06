@@ -1,31 +1,21 @@
 """
-terminal.py — Professional order flow intelligence terminal.
+terminal.py — Market Intelligence & Analyst Dashboard.
 
-Layout:
+Layout (6 panels):
 ┌──────────────────────────────────────────────────────────────┐
-│ OBI │ Market │ [YES] │ Regime │ Mid │ Spd │ ● 12ms          │
+│ OBI │ Market │ [YES] │ Regime │ Wt.Mid │ Spd │ ΔOBI │ ● 12ms│
 ├──────────────────────────┬───────────────────────────────────┤
 │                          │ MARKET STATE                      │
-│                          │ Dominant│Conviction│Liq│Agg│Risk  │
-│     ORDER BOOK           ├───────────────────────────────────┤
-│     (heat ladder)        │ METRICS                           │
-│                          │ Bid/Ask│OBI│Depth│Flow│Vol│Detect │
-│                          ├───────────────────────────────────┤
-│                          │ SIGNALS                           │
-│                          │ ▲ BUY YES 0.05 72% Sweep follow  │
+│     ORDER BOOK           │ Dominant│Conviction│Liq│Agg│Risk  │
+│  (heat ladder +          ├───────────────────────────────────┤
+│   Vegas Flash)           │ ANALYTICS                         │
+│                          │ Wt.Mid│OBI+Vel│CVD│Flow│Depth│Vol │
+├──────────────────────────┼───────────────────────────────────┤
+│ ACTIVITY INTELLIGENCE    │ TAPE                              │
+│ Timeline + CVD + Regime  │ TIME S SIZE PX VAL                │
+│ Narrative Event Feed     │                                   │
 ├──────────────────────────┴───────────────────────────────────┤
-│ ACTIVITY INTELLIGENCE                     │ TAPE             │
-│ Timeline ▁▂▃▅▇█▇▅▃▂▁▂▅▇▅▃▁▁▂▃▅▇▇▅▃▂▁   │ TIME S SIZE PX V │
-│ Flow ██████████████░░░░ HIGH  +0.83       │ 12:01 B 5.6K .03│
-│ Regime: AGGRESSIVE ACCUMULATION           │ 12:00 S  316 .03│
-│ Events: Swp ████ 56  Abs ██████████ 76    │                  │
-│ Buy  ████████████  $1,408                 │                  │
-│ Sell ██           $127    Delta: +$1,281  │                  │
-│ ▸ Whale Buy 23K @ 0.03                    │                  │
-│ ▸ Absorption @ 0.03 (wall held 92%)       │                  │
-│ ▸ 5-level sweep (ask side)                │                  │
-├──────────────────────────────────────────────────────────────┤
-│ Ctrl+C │ OBI v4.3 │ Session 02:15 │ Msgs 847 │ DB 12t 4s   │
+│ Ctrl+C │ OBI v5.0 INTEL │ Session 02:15 │ Msgs 847          │
 └──────────────────────────────────────────────────────────────┘
 """
 
@@ -43,6 +33,7 @@ from rich.align import Align
 
 from config import settings
 from state.orderbook import OrderBook
+from state.level_tracker import LevelTracker
 from data.models import Metrics, Insight, TradeEvent, Side
 
 
@@ -58,21 +49,28 @@ C_MUTED = "grey50"
 C_ACCENT = "bright_white"
 C_PANEL = "grey23"
 
+# Vegas Flash styles
+C_STACK = "bold cyan"        # Size increased >25% (stacking)
+C_PULL = "bold red"          # Size decreased >25% without trade (pulling)
+C_FLASH_EXTREME = "reverse"  # Size changed >50% (extreme)
+
 # Sparkline characters (8 levels)
 SPARK = "▁▂▃▄▅▆▇█"
 
 
 class TerminalUI:
 
-    def __init__(self, orderbook: OrderBook, market_question: str = "Loading...", token_label: str = "Yes"):
+    def __init__(self, orderbook: OrderBook, market_question: str = "Loading...",
+                 token_label: str = "Yes", level_tracker: Optional[LevelTracker] = None):
         self.ob = orderbook
         self.market_question = market_question
         self.token_label = token_label
         self.console = Console()
+        self._level_tracker = level_tracker
 
         self._metrics: Optional[Metrics] = None
+        self._prev_metrics: Optional[Metrics] = None
         self._insights: deque[Insight] = deque(maxlen=30)
-        self._signals: deque = deque(maxlen=6)
         self._connected = False
         self._messages_count = 0
         self._last_update: float = 0
@@ -82,28 +80,33 @@ class TerminalUI:
         # Activity tracking — richer data per tick
         self._activity_window: deque = deque(maxlen=300)
         # Sparkline buckets: 60 one-second buckets for timeline
-        self._spark_buckets: list[dict] = [{"buy": 0, "sell": 0, "events": 0, "ts": 0} for _ in range(60)]
+        self._spark_buckets: deque[dict] = deque(
+            ({"buy": 0, "sell": 0, "events": 0, "ts": 0} for _ in range(60)),
+            maxlen=60,
+        )
         self._spark_last_second: int = 0
-        # Event mini-feed (compact event descriptions)
-        self._event_feed: deque = deque(maxlen=12)
+        # Narrative event feed (rich context descriptions)
+        self._event_feed: deque = deque(maxlen=20)
+        # Dedup keys for narrative events (prevents same event re-emitted every tick)
+        self._event_seen: set[str] = set()
+        self._event_seen_max: int = 200
 
         # Layout ratios (adjustable with [ ] keys)
         self._left_ratio = 11
         self._right_ratio = 9
         self._book_ratio = 5
-        self._activity_ratio = 4
+        self._activity_ratio = 5  # Expanded (was 4)
 
-        # Strategy stats (Phase 5)
-        self._strategy_stats: dict = {}
         self._rotation_remaining: float = 0
         self._rotation_count: int = 0
 
         self._live: Optional[Live] = None
 
-    def update_metrics(self, metrics: Metrics):
+    def update_metrics(self, metrics: Metrics) -> None:
+        self._prev_metrics = self._metrics
         self._metrics = metrics
-        self._last_update = time.time()
         now = time.time()
+        self._last_update = now
         now_sec = int(now)
 
         # Track activity window
@@ -119,41 +122,96 @@ class TerminalUI:
             "flow": metrics.flow_pressure,
         })
 
-        # Update sparkline buckets
+        # Update sparkline buckets (deque maxlen auto-evicts oldest)
         if now_sec != self._spark_last_second:
-            # Shift buckets
-            self._spark_buckets.pop(0)
             self._spark_buckets.append({"buy": 0, "sell": 0, "events": 0, "ts": now_sec})
             self._spark_last_second = now_sec
 
         bucket = self._spark_buckets[-1]
-        event_count = len(metrics.sweep_events) + len(metrics.whale_events) + len(metrics.absorption_events) + len(metrics.spoof_signals)
+        event_count = (len(metrics.sweep_events) + len(metrics.whale_events)
+                       + len(metrics.absorption_events) + len(metrics.spoof_signals))
         bucket["events"] += event_count
         bucket["buy"] += metrics.buy_volume
         bucket["sell"] += metrics.sell_volume
 
-        # Populate event feed from detections
+        # Populate narrative event feed from detections
+        self._populate_narrative_feed(metrics)
+
+    def _emit_event(self, key: str, message: str) -> None:
+        """Emit a narrative event only if not already seen (dedup)."""
+        if key in self._event_seen:
+            return
+        self._event_seen.add(key)
+        self._event_feed.append(message)
+        # Prevent unbounded growth of seen set
+        if len(self._event_seen) > self._event_seen_max:
+            # Remove oldest half
+            to_keep = list(self._event_seen)[self._event_seen_max // 2:]
+            self._event_seen = set(to_keep)
+
+    def _populate_narrative_feed(self, metrics: Metrics) -> None:
+        """Generate rich narrative events instead of terse detection logs."""
         for sweep in metrics.sweep_events:
-            side = "Buy" if sweep.side == Side.BUY else "Sell"
-            self._event_feed.append(
-                f"[{C_ASK if side == 'Sell' else C_BID}]{side} sweep[/] "
-                f"{sweep.levels_consumed}lvl ({sweep.total_volume:,.0f})"
+            key = f"sweep:{sweep.side.value}:{sweep.start_price}:{sweep.timestamp_ms}"
+            side = "buyer" if sweep.side == Side.BUY else "seller"
+            sc = C_BID if sweep.side == Side.BUY else C_ASK
+            self._emit_event(key,
+                f"[{sc}]⚡ Aggressive {side} swept {sweep.levels_consumed} levels "
+                f"{sweep.start_price:.2f}→{sweep.end_price:.2f} "
+                f"({_fmt_size(sweep.total_volume)} contracts)[/{sc}]"
             )
         for whale in metrics.whale_events:
+            key = f"whale:{whale.side.value}:{whale.price}:{whale.timestamp_ms}"
             side = "Buy" if whale.side == Side.BUY else "Sell"
             sc = C_BID if side == "Buy" else C_ASK
-            self._event_feed.append(
-                f"[{sc}]Whale {side}[/] {_fmt_size(whale.size)} @ {whale.price:.2f}"
+            val = whale.price * whale.size
+            taker = "taker" if whale.is_taker else "passive"
+            self._emit_event(key,
+                f"[{sc}]🐋 Whale {side} ({taker}): {_fmt_size(whale.size)} "
+                f"@ {whale.price:.2f} (${val:,.0f})[/{sc}]"
             )
         for ab in metrics.absorption_events:
-            side = "Bid" if ab.side == Side.BUY else "Ask"
-            self._event_feed.append(
-                f"[{C_METRIC}]Absorption[/] @ {ab.price:.2f} ({min(ab.holding_pct, 1.0):.0%} held)"
-            )
+            key = f"abs:{ab.side.value}:{ab.price}:{ab.timestamp_ms}"
+            side = "bid" if ab.side == Side.BUY else "ask"
+            if ab.is_institutional:
+                self._emit_event(key,
+                    f"[bold {C_METRIC}]🏦 INSTITUTIONAL: Wall at {ab.price:.2f} "
+                    f"reloaded {ab.reload_count}× while absorbing "
+                    f"{_fmt_size(ab.volume_absorbed)} — {ab.holding_pct:.0%} held[/bold {C_METRIC}]"
+                )
+            else:
+                self._emit_event(key,
+                    f"[{C_METRIC}]🛡️ Absorption @ {ab.price:.2f} ({side}) — "
+                    f"wall held {min(ab.holding_pct, 1.0):.0%} after "
+                    f"{ab.trades_absorbed} trades[/{C_METRIC}]"
+                )
         for sp in metrics.spoof_signals:
+            key = f"spoof:{sp.side.value}:{sp.price}:{sp.timestamp_ms}"
             side = "bid" if sp.side == Side.BUY else "ask"
-            self._event_feed.append(
-                f"[{C_WARN}]Spoof[/] @ {sp.price:.2f} ({side}) {sp.oscillation_count}x"
+            self._emit_event(key,
+                f"[{C_WARN}]👻 Possible spoof at {sp.price:.2f} ({side}) — "
+                f"{sp.oscillation_count} oscillations, peak {_fmt_size(sp.max_size_seen)}[/{C_WARN}]"
+            )
+        # CVD divergence warning (keyed by second to allow re-emit after cooldown)
+        if metrics.cvd_divergence:
+            div_key = f"cvd_div:{int(time.time()) // 30}"  # 30s cooldown
+            if metrics.price_trend_strength > 0:
+                self._emit_event(div_key,
+                    f"[bold {C_WARN}]⚠️ DIVERGENCE: Price ↑ but CVD ↓ — "
+                    f"sellers absorbing buying momentum[/bold {C_WARN}]"
+                )
+            else:
+                self._emit_event(div_key,
+                    f"[bold {C_WARN}]⚠️ DIVERGENCE: Price ↓ but CVD ↑ — "
+                    f"buyers accumulating despite price drop[/bold {C_WARN}]"
+                )
+        # Liquidity voids (keyed by price+side, 10s cooldown)
+        for void in metrics.liquidity_voids[:2]:
+            key = f"void:{void.side.value}:{void.price}:{int(time.time()) // 10}"
+            side = "bid" if void.side == Side.BUY else "ask"
+            self._emit_event(key,
+                f"[{C_WARN}]🕳️ Flash Zone: Thin liquidity at {void.price:.2f} "
+                f"({side}) — {void.void_ratio:.0%} of avg depth[/{C_WARN}]"
             )
 
     def add_insight(self, insight: Insight):
@@ -163,10 +221,6 @@ class TerminalUI:
         for insight in insights:
             self._insights.append(insight)
 
-    def add_signals(self, signals: list):
-        for signal in signals:
-            self._signals.append(signal)
-
     def set_connected(self, connected: bool):
         self._connected = connected
 
@@ -175,9 +229,6 @@ class TerminalUI:
 
     def set_db_stats(self, stats: dict):
         self._db_stats = stats
-
-    def set_strategy_stats(self, stats: dict):
-        self._strategy_stats = stats
 
     def set_rotation_info(self, seconds_remaining: float, rotation_count: int):
         self._rotation_remaining = seconds_remaining
@@ -208,21 +259,17 @@ class TerminalUI:
             Layout(name="activity", ratio=self._activity_ratio),
         )
 
-        # Right: state + metrics + paper trading + signals + tape stacked
+        # Right: state + analytics + tape (paper & signals REMOVED)
         layout["right"].split_column(
             Layout(name="state", size=9),
-            Layout(name="metrics"),
-            Layout(name="paper", size=7),
-            Layout(name="signals", size=8),
+            Layout(name="analytics"),    # Flexible — absorbs freed space
             Layout(name="tape", size=13),
         )
 
         layout["header"].update(self._header())
         layout["book"].update(self._orderbook())
         layout["state"].update(self._market_state())
-        layout["metrics"].update(self._metrics_panel())
-        layout["paper"].update(self._paper_panel())
-        layout["signals"].update(self._signals_panel())
+        layout["analytics"].update(self._analytics_panel())
         layout["activity"].update(self._activity_intel())
         layout["tape"].update(self._trade_tape())
         layout["status"].update(self._status_bar())
@@ -232,24 +279,20 @@ class TerminalUI:
     def handle_key(self, key: str):
         """Handle keyboard input for layout resizing."""
         if key == "[":
-            # Shrink book, grow activity
             self._book_ratio = max(2, self._book_ratio - 1)
             self._activity_ratio = min(8, self._activity_ratio + 1)
         elif key == "]":
-            # Grow book, shrink activity
             self._book_ratio = min(8, self._book_ratio + 1)
             self._activity_ratio = max(2, self._activity_ratio - 1)
         elif key == "{":
-            # Shrink left, grow right
             self._left_ratio = max(6, self._left_ratio - 1)
             self._right_ratio = min(14, self._right_ratio + 1)
         elif key == "}":
-            # Grow left, shrink right
             self._left_ratio = min(14, self._left_ratio + 1)
             self._right_ratio = max(6, self._right_ratio - 1)
 
     # ══════════════════════════════════════════════════════════
-    # HEADER
+    # HEADER — weighted midpoint + ΔOBI
     # ══════════════════════════════════════════════════════════
 
     def _header(self) -> Panel:
@@ -258,7 +301,7 @@ class TerminalUI:
 
         t.append(" OBI ", style="bold white on grey30")
         t.append("  ")
-        t.append(self.market_question[:55], style="bold white")
+        t.append(self.market_question[:50], style="bold white")
         t.append("  ")
 
         tok_s = f"bold {C_BID}" if self.token_label.lower() in ("yes", "y") else f"bold {C_ASK}"
@@ -278,11 +321,24 @@ class TerminalUI:
                 t.append(f" {m.regime_confidence:.0%}", style=C_DIM)
             t.append("  │  ", style=C_DIM)
 
-            if m.midpoint:
-                t.append(f"Mid {m.midpoint:.4f}", style=C_ACCENT)
+            # Weighted midpoint (more predictive than simple mid)
+            if m.vwap_mid:
+                t.append(f"Wt.Mid {m.vwap_mid:.4f}", style=C_ACCENT)
+                # Show delta from prev
+                if self._prev_metrics and self._prev_metrics.vwap_mid:
+                    delta = m.vwap_mid - self._prev_metrics.vwap_mid
+                    if abs(delta) > 0.0001:
+                        dc = C_BID if delta > 0 else C_ASK
+                        t.append(f" Δ{delta:+.4f}", style=dc)
                 t.append("  │  ", style=C_DIM)
             if m.spread is not None:
                 t.append(f"Spd {m.spread:.3f}", style=C_METRIC)
+                t.append("  │  ", style=C_DIM)
+
+            # ΔOBI indicator
+            if m.obi_action != "STABLE":
+                oc = C_BID if m.obi_action == "STACKING" else C_ASK
+                t.append(f"{m.obi_action}", style=oc)
                 t.append("  │  ", style=C_DIM)
 
         if self._connected:
@@ -295,7 +351,7 @@ class TerminalUI:
         return Panel(t, style=C_PANEL, padding=(0, 0))
 
     # ══════════════════════════════════════════════════════════
-    # ORDER BOOK
+    # ORDER BOOK — with Vegas Flash
     # ══════════════════════════════════════════════════════════
 
     def _orderbook(self) -> Panel:
@@ -319,11 +375,21 @@ class TerminalUI:
             is_w = ask.price in wall_px
             sz = _fmt_size(ask.size)
             bar = _heat_bar(ask.size, mx, C_ASK)
-            ps = "bold red" if is_w else "red"
-            if is_w:
+
+            # Vegas Flash detection
+            flash_style = self._get_flash_style(ask.price, Side.SELL, ask.size)
+
+            if flash_style:
+                ps = flash_style
+                sz = f"[{flash_style}]{sz}[/{flash_style}]"
+            elif is_w:
+                ps = "bold red"
                 sz = f"[bold red]{sz}[/bold red]"
             elif ask.size / max(mx, 1) < 0.1:
+                ps = C_DIM
                 sz = f"[{C_DIM}]{sz}[/{C_DIM}]"
+            else:
+                ps = "red"
             table.add_row("", f"[{ps}]{ask.price:.2f}[/{ps}]", f"{sz} {bar}")
 
         spread = self.ob.spread
@@ -334,14 +400,58 @@ class TerminalUI:
             is_w = bid.price in wall_px
             sz = _fmt_size(bid.size)
             bar = _heat_bar(bid.size, mx, C_BID)
-            ps = "bold green" if is_w else "green"
-            if is_w:
+
+            # Vegas Flash detection
+            flash_style = self._get_flash_style(bid.price, Side.BUY, bid.size)
+
+            if flash_style:
+                ps = flash_style
+                sz = f"[{flash_style}]{sz}[/{flash_style}]"
+            elif is_w:
+                ps = "bold green"
                 sz = f"[bold green]{sz}[/bold green]"
             elif bid.size / max(mx, 1) < 0.1:
+                ps = C_DIM
                 sz = f"[{C_DIM}]{sz}[/{C_DIM}]"
+            else:
+                ps = "green"
             table.add_row(f"{bar} {sz}", f"[{ps}]{bid.price:.2f}[/{ps}]", "")
 
         return Panel(table, title=f"[{C_MUTED}]ORDER BOOK[/{C_MUTED}]", border_style=C_PANEL, padding=(0, 0))
+
+    def _get_flash_style(self, price: float, side: Side, current_size: float) -> Optional[str]:
+        """
+        Vegas Flash: detect rapid size changes and return the appropriate style.
+
+        Returns None if no flash, or a Rich style string.
+        """
+        if self._level_tracker is None:
+            return None
+
+        prev_size, curr_size = self._level_tracker.get_size_change(
+            price, side, settings.VEGAS_FLASH_WINDOW_SECONDS
+        )
+
+        if prev_size <= 0:
+            return None
+
+        change_pct = (curr_size - prev_size) / prev_size
+
+        # Check if change was "without trade" by seeing if trades exist at this level
+        level = self._level_tracker.get_level(price, side)
+        if level is not None:
+            recent_trades = level.get_trades_in_window(settings.VEGAS_FLASH_WINDOW_SECONDS)
+            if recent_trades:
+                return None  # Size changed due to trade execution, not manipulation
+
+        if abs(change_pct) >= settings.VEGAS_FLASH_EXTREME:
+            return C_FLASH_EXTREME
+        elif change_pct >= settings.VEGAS_FLASH_THRESHOLD:
+            return C_STACK  # Size increased = stacking
+        elif change_pct <= -settings.VEGAS_FLASH_THRESHOLD:
+            return C_PULL   # Size decreased without trade = pulling/spoofing
+
+        return None
 
     # ══════════════════════════════════════════════════════════
     # MARKET STATE
@@ -415,130 +525,120 @@ class TerminalUI:
         return Panel(t, title=f"[{C_MUTED}]MARKET STATE[/{C_MUTED}]", border_style=C_PANEL, padding=(0, 0))
 
     # ══════════════════════════════════════════════════════════
-    # METRICS
+    # ANALYTICS — expanded panel with deltas and velocity
     # ══════════════════════════════════════════════════════════
 
-    def _metrics_panel(self) -> Panel:
+    def _analytics_panel(self) -> Panel:
         m = self._metrics
+        p = self._prev_metrics
         if not m:
             return Panel(f"[{C_DIM}]...[/{C_DIM}]",
-                         title=f"[{C_MUTED}]METRICS[/{C_MUTED}]", border_style=C_PANEL)
+                         title=f"[{C_MUTED}]ANALYTICS[/{C_MUTED}]", border_style=C_PANEL)
 
         t = Table(show_header=False, expand=True, padding=(0, 1), show_edge=False)
         t.add_column("K", style=C_MUTED, ratio=2)
-        t.add_column("V", justify="right", ratio=2)
+        t.add_column("V", justify="right", ratio=3)
 
-        t.add_row("Bid / Ask",
-                   f"[{C_BID}]{m.best_bid:.2f}[/{C_BID}] / [{C_ASK}]{m.best_ask:.2f}[/{C_ASK}]"
-                   if m.best_bid and m.best_ask else "—")
+        # Weighted Midpoint + delta
+        if m.vwap_mid:
+            mid_str = f"[{C_ACCENT}]{m.vwap_mid:.4f}[/{C_ACCENT}]"
+            if p and p.vwap_mid:
+                delta = m.vwap_mid - p.vwap_mid
+                if abs(delta) > 0.0001:
+                    dc = C_BID if delta > 0 else C_ASK
+                    mid_str += f" [{dc}](Δ{delta:+.4f})[/{dc}]"
+            t.add_row("Wt.Mid", mid_str)
 
+        # Spread + delta
+        if m.spread is not None:
+            spd_str = f"[{C_METRIC}]{m.spread:.3f}[/{C_METRIC}]"
+            if p and p.spread is not None:
+                ds = m.spread - p.spread
+                if abs(ds) > 0.001:
+                    dc = C_ASK if ds > 0 else C_BID  # Wider spread = bad
+                    spd_str += f" [{dc}](Δ{ds:+.3f})[/{dc}]"
+            t.add_row("Spread", spd_str)
+
+        # OBI + bar + velocity label
         if m.obi is not None:
-            t.add_row("OBI", f"{m.obi:.0%} {_imbalance_bar(m.obi)}")
+            obi_bar = _imbalance_bar(m.obi)
+            ac = C_BID if m.obi_action == "STACKING" else C_ASK if m.obi_action == "PULLING" else C_DIM
+            arrow = "↑" if m.obi_action == "STACKING" else "↓" if m.obi_action == "PULLING" else ""
+            t.add_row("OBI", f"{m.obi:.0%} {obi_bar} [{ac}]{m.obi_action} {arrow}[/{ac}]")
+            # OBI velocity detail
+            t.add_row("", f"[{C_DIM}]5s vel: {m.obi_velocity_5s:+.4f}/s  "
+                         f"30s vel: {m.obi_velocity_30s:+.4f}/s[/{C_DIM}]")
 
-        t.add_row("Depth B/A",
-                   f"[{C_BID}]{_fmt_size(m.total_bid_depth)}[/{C_BID}] / "
-                   f"[{C_ASK}]{_fmt_size(m.total_ask_depth)}[/{C_ASK}]")
+        # CVD — cumulative + rolling windows
+        cvd_arrow = "▲" if m.cvd > 0 else "▼" if m.cvd < 0 else "─"
+        cvd_color = C_BID if m.cvd > 0 else C_ASK if m.cvd < 0 else C_DIM
+        t.add_row("CVD",
+                   f"[{cvd_color}]{m.cvd:+,.0f} {cvd_arrow}[/{cvd_color}]  "
+                   f"[{C_DIM}](5s: {m.cvd_5s:+,.0f}  30s: {m.cvd_30s:+,.0f})[/{C_DIM}]")
+        if m.cvd_divergence:
+            t.add_row("", f"[bold {C_WARN}]⚠ DIVERGENCE: Price/CVD opposing[/bold {C_WARN}]")
 
+        # Flow + buy/sell breakdown + delta
         fc = C_BID if m.flow_pressure > 0.1 else C_ASK if m.flow_pressure < -0.1 else C_MUTED
+        flow_label = "BUY PRESSURE" if m.flow_pressure > 0.3 else "SELL PRESSURE" if m.flow_pressure < -0.3 else ""
         t.add_row("Flow",
                    f"[{fc}]{m.flow_pressure:+.2f}[/{fc}] "
-                   f"[{C_DIM}]B${m.buy_volume:,.0f} S${m.sell_volume:,.0f}[/{C_DIM}]")
+                   f"{_h_bar(abs(m.flow_pressure), 10, fc)} "
+                   f"[{C_DIM}]{flow_label}[/{C_DIM}]")
+        # Buy/sell breakdown + delta
+        buy_sell = (f"[{C_BID}]B${m.buy_volume:,.0f}[/{C_BID}] │ "
+                    f"[{C_ASK}]S${m.sell_volume:,.0f}[/{C_ASK}]")
+        if p:
+            delta_vol = (m.buy_volume - m.sell_volume) - (p.buy_volume - p.sell_volume)
+            if abs(delta_vol) > 1:
+                dvc = C_BID if delta_vol > 0 else C_ASK
+                buy_sell += f"  [{dvc}]Δ${abs(delta_vol):,.0f}[/{dvc}]"
+        t.add_row("", buy_sell)
 
+        # Depth totals + ratio
+        if m.total_bid_depth + m.total_ask_depth > 0:
+            ratio = m.total_bid_depth / max(m.total_ask_depth, 1)
+            t.add_row("Depth",
+                       f"[{C_BID}]B:{_fmt_size(m.total_bid_depth)}[/{C_BID}]  "
+                       f"[{C_ASK}]A:{_fmt_size(m.total_ask_depth)}[/{C_ASK}]  "
+                       f"[{C_DIM}]Ratio {ratio:.1f}[/{C_DIM}]")
+
+        # Volatility
         vc = C_ASK if m.volatility > 0.5 else C_WARN if m.volatility > 0.2 else C_DIM
         t.add_row("Vol", f"[{vc}]{m.volatility:.2f}[/{vc}] {_vol_bar(m.volatility)}")
 
-        if abs(m.price_trend_strength) > 0.05:
-            tc = C_BID if m.price_trend_strength > 0 else C_ASK
-            t.add_row("Trend", f"[{tc}]{m.price_trend_strength:+.2f}[/{tc}]")
+        # Liquidity voids
+        void_count = len(m.liquidity_voids)
+        if void_count > 0:
+            nearest = m.liquidity_voids[0]
+            side_label = "b" if nearest.side == Side.BUY else "a"
+            t.add_row("Voids",
+                       f"[{C_WARN}]{void_count} flash zone{'s' if void_count > 1 else ''} "
+                       f"(nearest: {nearest.price:.2f}{side_label})[/{C_WARN}]")
+        else:
+            t.add_row("Voids", f"[{C_DIM}]None[/{C_DIM}]")
 
+        # Detection counts
         dets = []
         if m.spoof_signals:
-            dets.append(f"[{C_WARN}]{len(m.spoof_signals)} spf[/{C_WARN}]")
+            dets.append(f"[{C_WARN}]Spf:{len(m.spoof_signals)}[/{C_WARN}]")
         if m.absorption_events:
-            dets.append(f"[{C_METRIC}]{len(m.absorption_events)} abs[/{C_METRIC}]")
+            inst_count = sum(1 for a in m.absorption_events if a.is_institutional)
+            label = f"Abs:{len(m.absorption_events)}"
+            if inst_count > 0:
+                label += f"({inst_count}🏦)"
+            dets.append(f"[{C_METRIC}]{label}[/{C_METRIC}]")
         if m.sweep_events:
-            dets.append(f"[{C_ASK}]{len(m.sweep_events)} swp[/{C_ASK}]")
+            dets.append(f"[{C_ASK}]Swp:{len(m.sweep_events)}[/{C_ASK}]")
         if m.walls:
-            dets.append(f"[{C_ACCENT}]{len(m.walls)} wall[/{C_ACCENT}]")
+            dets.append(f"[{C_ACCENT}]Wl:{len(m.walls)}[/{C_ACCENT}]")
         if dets:
             t.add_row("Detect", " ".join(dets))
 
-        return Panel(t, title=f"[{C_MUTED}]METRICS[/{C_MUTED}]", border_style=C_PANEL, padding=(0, 0))
+        return Panel(t, title=f"[{C_MUTED}]ANALYTICS[/{C_MUTED}]", border_style=C_PANEL, padding=(0, 0))
 
     # ══════════════════════════════════════════════════════════
-    # PAPER TRADING — live PnL and position tracking
-    # ══════════════════════════════════════════════════════════
-
-    def _paper_panel(self) -> Panel:
-        s = self._strategy_stats
-        if not s:
-            return Panel(f"[{C_DIM}]Paper trading active...[/{C_DIM}]",
-                         title=f"[{C_MUTED}]PAPER TRADING[/{C_MUTED}]", border_style=C_PANEL)
-
-        mode = s.get("mode", "paper").upper()
-        halted = s.get("halted", False)
-        total = s.get("total_trades", 0)
-        wins = s.get("wins", 0)
-        losses = s.get("losses", 0)
-        wr = s.get("win_rate", 0)
-        pnl = s.get("total_pnl", 0)
-        open_pos = s.get("open_positions", 0)
-        exposure = s.get("exposure_usd", 0)
-
-        pnl_color = C_BID if pnl >= 0 else C_ASK
-        wr_color = C_BID if wr >= 0.5 else C_ASK if wr < 0.4 else C_WARN
-        mode_color = C_WARN if mode == "PAPER" else C_ASK
-
-        lines = []
-        # Row 1: mode + halted status
-        halt_tag = f"  [{C_ASK}]HALTED[/{C_ASK}]" if halted else ""
-        lines.append(
-            f"  [{mode_color}]{mode}[/{mode_color}]{halt_tag}"
-            f"   [{C_MUTED}]Trades:[/{C_MUTED}] [{C_ACCENT}]{total}[/{C_ACCENT}]"
-            f"   [{C_BID}]W{wins}[/{C_BID}]/[{C_ASK}]L{losses}[/{C_ASK}]"
-            f"   [{C_MUTED}]WR:[/{C_MUTED}] [{wr_color}]{wr:.0%}[/{wr_color}]"
-        )
-        # Row 2: PnL + exposure
-        lines.append(
-            f"  [{C_MUTED}]PnL:[/{C_MUTED}] [{pnl_color}]${pnl:+.2f}[/{pnl_color}]"
-            f"   [{C_MUTED}]Open:[/{C_MUTED}] [{C_ACCENT}]{open_pos}[/{C_ACCENT}]"
-            f"   [{C_MUTED}]Exp:[/{C_MUTED}] [{C_METRIC}]${exposure:.2f}[/{C_METRIC}]"
-        )
-        # Row 3: signal stats
-        sig_recv = s.get("signals_received", 0)
-        sig_filt = s.get("signals_filtered", 0)
-        orders = s.get("orders_placed", 0)
-        lines.append(
-            f"  [{C_MUTED}]Signals:[/{C_MUTED}] {sig_recv} recv  {sig_filt} filtered  {orders} executed"
-        )
-
-        return Panel("\n".join(lines), title=f"[{C_MUTED}]PAPER TRADING[/{C_MUTED}]", border_style=C_PANEL, padding=(0, 0))
-
-    # ══════════════════════════════════════════════════════════
-    # SIGNALS
-    # ══════════════════════════════════════════════════════════
-
-    def _signals_panel(self) -> Panel:
-        if not self._signals:
-            return Panel(f"[{C_DIM}]Scanning...[/{C_DIM}]",
-                         title=f"[{C_MUTED}]SIGNALS[/{C_MUTED}]", border_style=C_PANEL)
-
-        lines = []
-        for sig in list(self._signals)[-5:]:
-            ac = C_BID if sig.action == "BUY" else C_ASK
-            arrow = "▲" if sig.action == "BUY" else "▼"
-            cs = C_BID if sig.confidence >= 70 else C_WARN if sig.confidence >= 55 else C_DIM
-            lines.append(
-                f"[{C_DIM}]{sig.time_str}[/{C_DIM}] "
-                f"[{ac}]{arrow} {sig.action} {sig.token} {sig.entry_price:.2f}[/{ac}] "
-                f"[{cs}]{sig.confidence}%[/{cs}] "
-                f"[{C_MUTED}]{sig.reason[:50]}[/{C_MUTED}]"
-            )
-
-        return Panel("\n".join(lines), title=f"[{C_MUTED}]SIGNALS[/{C_MUTED}]", border_style=C_PANEL)
-
-    # ══════════════════════════════════════════════════════════
-    # ACTIVITY INTELLIGENCE — the dense panel
+    # ACTIVITY INTELLIGENCE — expanded with CVD + narrative
     # ══════════════════════════════════════════════════════════
 
     def _activity_intel(self) -> Panel:
@@ -555,7 +655,8 @@ class TerminalUI:
 
         # ── ROW 2: Flow Intensity Bar ──
         flow_intensity, flow_label = self._compute_flow_intensity(recent)
-        fi_bar = _h_bar(flow_intensity, 20, C_METRIC if flow_intensity < 0.6 else C_WARN if flow_intensity < 0.8 else C_ASK)
+        fi_color = C_METRIC if flow_intensity < 0.6 else C_WARN if flow_intensity < 0.8 else C_ASK
+        fi_bar = _h_bar(flow_intensity, 20, fi_color)
         flow_val = m.flow_pressure if m else 0
         fc = C_BID if flow_val > 0.1 else C_ASK if flow_val < -0.1 else C_MUTED
         lines.append(
@@ -600,12 +701,12 @@ class TerminalUI:
             f"[{delta_color}]Δ ${abs(delta):,.0f} {delta_label}[/{delta_color}]"
         )
 
-        # ── ROW 6+: Mini Event Feed (newest at bottom) ──
-        feed = list(self._event_feed)[-10:]
+        # ── ROW 6+: Narrative Event Feed (newest at bottom) ──
+        feed = list(self._event_feed)[-12:]
         if feed:
             lines.append("")
             for ev in feed:
-                lines.append(f"  [{C_DIM}]▸[/{C_DIM}] {ev}")
+                lines.append(f"  {ev}")
 
         # ── Recent Insights (fill remaining space) ──
         recent_insights = list(self._insights)[-8:]
@@ -669,7 +770,7 @@ class TerminalUI:
         t.append(f"  ", style=C_DIM)
         t.append(f"{{ }} resize H", style=C_DIM)
         t.append(f"  │  ", style=C_DIM)
-        t.append(f"OBI v4.3", style=C_MUTED)
+        t.append(f"OBI v5.0 INTEL", style=C_MUTED)
         t.append(f"  │  ", style=C_DIM)
         t.append(f"Session {mins:02d}:{secs:02d}", style=C_DIM)
         t.append(f"  │  ", style=C_DIM)
@@ -693,7 +794,7 @@ class TerminalUI:
     def start(self):
         self._live = Live(
             self.build_layout(), console=self.console,
-            refresh_per_second=settings.UI_REFRESH_RATE, screen=True,
+            refresh_per_second=1 / settings.UI_REFRESH_RATE, screen=True,
         )
         self._live.start()
 
@@ -720,7 +821,6 @@ class TerminalUI:
         """Render a 60-char unicode sparkline of activity intensity."""
         values = []
         for b in self._spark_buckets:
-            # Intensity = events + normalized volume
             intensity = b["events"] * 3 + (b["buy"] + b["sell"]) / 100
             values.append(intensity)
 
@@ -734,7 +834,6 @@ class TerminalUI:
             level = max(0, min(level, 7))
             c = SPARK[level]
 
-            # Color: green for buy-dominant seconds, red for sell, yellow for events
             b = self._spark_buckets[i]
             if b["events"] > 2:
                 color = C_WARN
@@ -760,7 +859,6 @@ class TerminalUI:
         )
         total_vol = sum(a["buy_vol"] + a["sell_vol"] for a in recent)
 
-        # Normalize: events weight + volume weight
         event_score = min(total_events / 50, 1.0) * 0.6
         vol_score = min(total_vol / 10000, 1.0) * 0.4
         intensity = min(event_score + vol_score, 1.0)
@@ -788,7 +886,6 @@ class TerminalUI:
         total_events = sum(a["sweeps"] + a["whales"] + a["absorptions"] + a["spoofs"] for a in recent)
         avg_flow = sum(a.get("flow", 0) for a in recent) / max(len(recent), 1)
 
-        # Scoring
         if total_events > 30 and total_sweeps > 10:
             if avg_flow > 0.3:
                 return "AGGRESSIVE ACCUMULATION", C_BID

@@ -184,6 +184,10 @@ class AbsorptionEvent(BaseModel):
 
     This is a STRONG signal — it means a large participant is
     committed to defending that price level.
+
+    If is_institutional=True, the wall was observed reloading (size
+    dropping from trades then jumping back) — indicating active
+    replenishment by an institution.
     """
     price: float
     side: Side                      # BUY = absorbing sells, SELL = absorbing buys
@@ -192,6 +196,8 @@ class AbsorptionEvent(BaseModel):
     volume_absorbed: float          # Total volume absorbed
     holding_pct: float              # What % of original size remains
     timestamp_ms: int
+    is_institutional: bool = False  # True if reload pattern detected
+    reload_count: int = 0           # Number of size-recovery cycles
 
 
 class SweepEvent(BaseModel):
@@ -208,6 +214,21 @@ class SweepEvent(BaseModel):
     end_price: float                # Price where sweep ended
     total_volume: float             # Total contracts swept
     timestamp_ms: int
+
+
+class LiquidityVoid(BaseModel):
+    """
+    A gap in the order book where liquidity is abnormally thin.
+
+    These are 'Flash Zones' where price can teleport through due to
+    lack of resting orders. Detected when a level's depth is less than
+    LIQUIDITY_VOID_THRESHOLD (10%) of the 10-level average.
+    """
+    price: float
+    side: Side
+    depth: float                    # Actual depth at this level
+    avg_depth: float                # 10-level average depth
+    void_ratio: float               # depth / avg_depth (< 0.10)
 
 
 class Metrics(BaseModel):
@@ -256,6 +277,16 @@ class Metrics(BaseModel):
     regime: str = "QUIET"           # Current market regime
     regime_confidence: float = 0.0   # 0.0 to 1.0
     regime_duration_s: float = 0.0   # Seconds in current regime
+
+    # Phase 4: Intelligence Dashboard
+    cvd: float = 0.0                # Cumulative Volume Delta (session total)
+    cvd_5s: float = 0.0             # 5-second rolling CVD
+    cvd_30s: float = 0.0            # 30-second rolling CVD
+    cvd_divergence: bool = False     # True if price/CVD divergence detected
+    obi_velocity_5s: float = 0.0    # 5s OBI rate of change
+    obi_velocity_30s: float = 0.0   # 30s OBI rate of change
+    obi_action: str = "STABLE"      # STACKING / PULLING / STABLE
+    liquidity_voids: list["LiquidityVoid"] = []
 
 
 class Insight(BaseModel):

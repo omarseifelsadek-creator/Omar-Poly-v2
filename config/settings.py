@@ -146,6 +146,27 @@ SNAPSHOT_INTERVAL_SECONDS: float = 5.0
 STORAGE_ENABLED: bool = False
 
 # ──────────────────────────────────────────────────────────────
+# PHASE 4: INTELLIGENCE DASHBOARD
+# ──────────────────────────────────────────────────────────────
+# CVD divergence: minimum opposing strength to flag a divergence
+CVD_DIVERGENCE_THRESHOLD: float = 0.3
+
+# OBI velocity: rate of change thresholds (per second)
+OBI_VELOCITY_STACKING_THRESHOLD: float = 0.02   # OBI accelerating = "STACKING"
+OBI_VELOCITY_PULLING_THRESHOLD: float = -0.02   # OBI decelerating = "PULLING"
+
+# Liquidity voids: levels below this fraction of average = Flash Zone
+LIQUIDITY_VOID_THRESHOLD: float = 0.10           # < 10% of 10-level avg
+
+# Vegas Flash: order book size-change visual highlighting
+VEGAS_FLASH_THRESHOLD: float = 0.25              # 25% change = flash
+VEGAS_FLASH_EXTREME: float = 0.50                # 50% change = extreme flash
+VEGAS_FLASH_WINDOW_SECONDS: float = 3.0          # Look-back for size comparison
+
+# Institutional absorption: minimum reload cycles to flag
+INSTITUTIONAL_ABSORPTION_RELOADS: int = 2
+
+# ──────────────────────────────────────────────────────────────
 # TERMINAL UI SETTINGS
 # ──────────────────────────────────────────────────────────────
 # How often to refresh the terminal display (seconds)

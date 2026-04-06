@@ -157,6 +157,62 @@ class LevelHistory:
                 best = entry.size
         return best
 
+    def get_size_change(self, window_seconds: float = 3.0) -> tuple[float, float]:
+        """
+        Get the previous and current size for Vegas Flash detection.
+
+        Returns:
+            (previous_size, current_size) where previous_size is the
+            size at approximately window_seconds ago.
+        """
+        current = self.current_size
+        prev = self.get_size_at_time(window_seconds)
+        return (prev if prev is not None else current, current)
+
+    def count_reload_cycles(self, window_seconds: float, min_size: float) -> int:
+        """
+        Count reload cycles for institutional absorption detection.
+
+        A reload cycle is: size drops significantly (>20% loss) then
+        recovers to within 80% of the pre-drop level.
+
+        Returns:
+            Number of reload cycles in the window.
+        """
+        cutoff_ms = int((time.time() - window_seconds) * 1000)
+        recent = [e for e in self.entries if e.timestamp_ms >= cutoff_ms]
+
+        if len(recent) < 3:
+            return 0
+
+        reloads = 0
+        peak = recent[0].size
+        if peak < min_size:
+            # Find first entry above min_size to use as starting peak
+            for e in recent:
+                if e.size >= min_size:
+                    peak = e.size
+                    break
+            else:
+                return 0  # No significant size in window
+        dropped = False
+
+        for entry in recent[1:]:
+            if not dropped:
+                # Looking for a significant drop
+                if peak > min_size and entry.size < peak * 0.8:
+                    dropped = True
+            else:
+                # Looking for recovery
+                if entry.size >= peak * 0.8:
+                    reloads += 1
+                    dropped = False
+                    peak = entry.size
+                elif entry.size > peak:
+                    peak = entry.size
+
+        return reloads
+
 
 class LevelTracker:
     """
@@ -250,6 +306,20 @@ class LevelTracker:
         if side is not None:
             levels = [l for l in levels if l.side == side]
         return levels
+
+    def get_size_change(self, price: float, side: Side, window_s: float = 3.0) -> tuple[float, float]:
+        """
+        Get (previous_size, current_size) for a specific level.
+
+        Used by Vegas Flash to detect rapid size changes in the order book.
+
+        Returns:
+            (prev_size, current_size) — both 0.0 if level not tracked.
+        """
+        level = self.get_level(price, side)
+        if level is None:
+            return (0.0, 0.0)
+        return level.get_size_change(window_s)
 
     def _cleanup(self):
         """Remove levels with no recent activity to free memory."""

@@ -169,6 +169,13 @@ def detect_absorption(
         # Absorption = level held most of its size despite trades
         min_holding = 1.0 - settings.ABSORPTION_SIZE_TOLERANCE
         if holding_pct >= min_holding:
+            # Check for institutional reload pattern
+            reload_count = level_history.count_reload_cycles(
+                window_seconds=settings.ABSORPTION_WINDOW_SECONDS,
+                min_size=settings.SPOOF_MIN_SIZE,
+            )
+            is_institutional = reload_count >= settings.INSTITUTIONAL_ABSORPTION_RELOADS
+
             events.append(AbsorptionEvent(
                 price=level_history.price,
                 side=level_history.side,
@@ -177,6 +184,8 @@ def detect_absorption(
                 volume_absorbed=volume_absorbed,
                 holding_pct=round(holding_pct, 2),
                 timestamp_ms=now_ms,
+                is_institutional=is_institutional,
+                reload_count=reload_count,
             ))
 
     return events

@@ -26,6 +26,7 @@ from data.models import (
     Metrics,
     WallInfo,
     WhaleEvent,
+    LiquidityVoid,
     Side,
     TradeEvent,
 )
@@ -36,6 +37,7 @@ def compute_all_metrics(
     ob: OrderBook,
     level_tracker: LevelTracker | None = None,
     momentum_engine: "MomentumEngine | None" = None,
+    cvd_tracker: "CVDTracker | None" = None,
 ) -> Metrics:
     """
     Compute ALL metrics from the current order book state.
@@ -99,7 +101,47 @@ def compute_all_metrics(
         sweep_events=sweep_events,
     )
 
-    metrics = Metrics(
+    # Phase 4: Liquidity voids
+    voids = detect_liquidity_voids(ob)
+
+    # Phase 4: OBI velocity
+    obi_vel = compute_obi_velocity(momentum_engine) if momentum_engine else {}
+
+    # Phase 4: CVD
+    cvd_data: dict = {}
+    if cvd_tracker is not None:
+        cvd_5s = cvd_tracker.rolling(5.0)
+        cvd_30s = cvd_tracker.rolling(30.0)
+        price_trend = 0.0
+        if momentum_engine is not None:
+            ms = momentum_engine.get_state()
+            if ms and ms.is_ready:
+                price_trend = ms.price_trend_strength
+        cvd_data = {
+            "cvd": cvd_tracker.cumulative,
+            "cvd_5s": round(cvd_5s, 2),
+            "cvd_30s": round(cvd_30s, 2),
+            "cvd_divergence": cvd_tracker.check_divergence(price_trend),
+        }
+
+    # Phase 3: Build momentum fields dict (avoids post-construction mutation)
+    momentum_fields: dict = {}
+    if momentum_state and momentum_state.is_ready:
+        momentum_fields = {
+            "price_velocity": round(momentum_state.price_velocity, 6),
+            "price_accel": round(momentum_state.price_accel, 6),
+            "price_trend_strength": round(momentum_state.price_trend_strength, 4),
+            "obi_velocity": round(momentum_state.obi_velocity, 6),
+            "obi_trend_strength": round(momentum_state.obi_trend_strength, 4),
+            "depth_divergence": round(momentum_state.depth_divergence, 4),
+            "flow_trend_strength": round(momentum_state.flow_trend_strength, 4),
+            "volatility": round(momentum_state.volatility, 4),
+            "regime": momentum_state.regime.value,
+            "regime_confidence": round(momentum_state.regime_confidence, 2),
+            "regime_duration_s": round(momentum_state.regime_duration_s, 1),
+        }
+
+    return Metrics(
         timestamp_ms=now_ms,
         best_bid=ob.best_bid,
         best_ask=ob.best_ask,
@@ -118,23 +160,15 @@ def compute_all_metrics(
         absorption_events=absorption_events,
         sweep_events=sweep_events,
         sentiment=sentiment,
+        # Phase 3: Momentum
+        **momentum_fields,
+        # Phase 4: Intelligence Dashboard
+        liquidity_voids=voids,
+        obi_velocity_5s=obi_vel.get("velocity_5s", 0.0),
+        obi_velocity_30s=obi_vel.get("velocity_30s", 0.0),
+        obi_action=obi_vel.get("action", "STABLE"),
+        **cvd_data,
     )
-
-    # Attach Phase 3 momentum data if available
-    if momentum_state and momentum_state.is_ready:
-        metrics.price_velocity = round(momentum_state.price_velocity, 6)
-        metrics.price_accel = round(momentum_state.price_accel, 6)
-        metrics.price_trend_strength = round(momentum_state.price_trend_strength, 4)
-        metrics.obi_velocity = round(momentum_state.obi_velocity, 6)
-        metrics.obi_trend_strength = round(momentum_state.obi_trend_strength, 4)
-        metrics.depth_divergence = round(momentum_state.depth_divergence, 4)
-        metrics.flow_trend_strength = round(momentum_state.flow_trend_strength, 4)
-        metrics.volatility = round(momentum_state.volatility, 4)
-        metrics.regime = momentum_state.regime.value
-        metrics.regime_confidence = round(momentum_state.regime_confidence, 2)
-        metrics.regime_duration_s = round(momentum_state.regime_duration_s, 1)
-
-    return metrics
 
 
 # ──────────────────────────────────────────────────────────────
@@ -458,3 +492,84 @@ def compute_sentiment_v3(
 # Keep old function as alias for backward compatibility
 def compute_sentiment(obi, flow_pressure, ob):
     return compute_sentiment_v3(obi, flow_pressure, ob)
+
+
+# ──────────────────────────────────────────────────────────────
+# PHASE 4: INTELLIGENCE DASHBOARD METRICS
+# ──────────────────────────────────────────────────────────────
+
+def detect_liquidity_voids(ob: OrderBook) -> list[LiquidityVoid]:
+    """
+    Detect 'Flash Zones' — levels where liquidity is abnormally thin.
+
+    A liquidity void exists when a level's depth is less than
+    LIQUIDITY_VOID_THRESHOLD (default 10%) of the 10-level average.
+    Price can teleport through these zones because there's nothing
+    to absorb momentum.
+
+    Returns:
+        List of LiquidityVoid objects, sorted by price.
+    """
+    voids = []
+
+    for side, levels in [
+        (Side.BUY, ob.get_sorted_bids(max_levels=10)),
+        (Side.SELL, ob.get_sorted_asks(max_levels=10)),
+    ]:
+        if len(levels) < 3:
+            continue
+
+        sizes = [level.size for level in levels]
+        avg_depth = sum(sizes) / len(sizes) if sizes else 0.0
+
+        if avg_depth <= 0:
+            continue
+
+        threshold = avg_depth * settings.LIQUIDITY_VOID_THRESHOLD
+
+        for level in levels:
+            if level.size < threshold and level.size > 0:
+                voids.append(LiquidityVoid(
+                    price=level.price,
+                    side=side,
+                    depth=level.size,
+                    avg_depth=round(avg_depth, 2),
+                    void_ratio=round(level.size / avg_depth, 4),
+                ))
+
+    return voids
+
+
+def compute_obi_velocity(momentum_engine: "MomentumEngine") -> dict:
+    """
+    Compute 5-second and 30-second OBI rate of change.
+
+    Uses the momentum engine's OBI EMA tracker to compute
+    windowed linear slopes, then classifies the action as
+    STACKING (book building up), PULLING (book thinning), or STABLE.
+
+    Returns:
+        dict with velocity_5s, velocity_30s, and action label.
+    """
+    state = momentum_engine.get_state()
+    if state is None or not state.is_ready:
+        return {"velocity_5s": 0.0, "velocity_30s": 0.0, "action": "STABLE"}
+
+    # Use the OBI velocity from momentum state as the 5s proxy
+    vel_5s = round(state.obi_velocity, 6)
+    # Use OBI trend strength as 30s proxy (already smoothed over slow EMA)
+    vel_30s = round(state.obi_trend_strength, 4)
+
+    # Classify action
+    if vel_5s > settings.OBI_VELOCITY_STACKING_THRESHOLD:
+        action = "STACKING"
+    elif vel_5s < settings.OBI_VELOCITY_PULLING_THRESHOLD:
+        action = "PULLING"
+    else:
+        action = "STABLE"
+
+    return {
+        "velocity_5s": vel_5s,
+        "velocity_30s": vel_30s,
+        "action": action,
+    }

@@ -40,13 +40,11 @@ from state.orderbook import OrderBook
 from state.level_tracker import LevelTracker
 from analytics.metrics import compute_all_metrics
 from analytics.interpreter import generate_insights
-from analytics.signals import generate_signals, TradeSignal
 from analytics.momentum import MomentumEngine
+from analytics.cvd import CVDTracker
 from storage.database import Database
 from ui.terminal import TerminalUI
-from execution.strategy import StrategyEngine, StrategyConfig, TradingMode
 from telegram.telegram_bot import TelegramBot
-from execution.trade_logger import log_trade_entry, log_trade_exit, log_signal, log_stats, log_session_summary
 from config.live_config import LiveConfig
 
 # Configure logging (only show warnings+ to avoid cluttering the terminal)
@@ -85,17 +83,14 @@ class OBIApp:
         self.orderbook = OrderBook()
         self.level_tracker = LevelTracker()       # Phase 2
         self.momentum_engine = MomentumEngine()   # Phase 3
+        self.cvd_tracker = CVDTracker()           # Phase 4: session-persistent CVD
         self.db = Database() if settings.STORAGE_ENABLED else None
-        self.ui = TerminalUI(self.orderbook, market_question or "Loading...", token_label)
+        self.ui = TerminalUI(self.orderbook, market_question or "Loading...", token_label,
+                             level_tracker=self.level_tracker)
         self.rest_client = RestClient()
 
-        # Phase 5: Execution + Telegram
+        # Telegram + config
         self.live_config = LiveConfig()
-        strategy_config = self.live_config.get_config()
-        # Override mode from CLI if specified
-        if trading_mode == "live":
-            strategy_config.mode = TradingMode.LIVE
-        self.strategy = StrategyEngine(strategy_config, token_id, token_label)
         self.telegram = TelegramBot(enabled=self.live_config.telegram_enabled)
 
         # State
@@ -105,15 +100,14 @@ class OBIApp:
         self._prev_metrics = None
         self._ws_client: Optional[WebSocketClient] = None
         self._metrics_store_counter = 0
-        self._stats_log_counter = 0
 
     async def run(self):
         """
         Main run loop. Starts WebSocket, UI, and DB stats concurrently.
         """
-        console.print(f"\n[bold cyan]Starting OBI v4.3 for:[/bold cyan] {self.market_question}")
+        console.print(f"\n[bold cyan]Starting OBI v5.0 Intelligence Dashboard for:[/bold cyan] {self.market_question}")
         console.print(f"[dim]Token: {self.token_id[:40]}...[/dim]")
-        console.print(f"[dim]Strategy: {self.strategy.config.mode.value.upper()}[/dim]")
+        console.print(f"[dim]Mode: Market Intelligence (read-only)[/dim]")
 
         # Initialize database
         if self.db:
@@ -123,7 +117,7 @@ class OBIApp:
         # Start Telegram
         await self.telegram.start()
         await self.telegram.send_startup(
-            self.market_question, self.token_label, self.strategy.config.mode.value
+            self.market_question, self.token_label, "intelligence"
         )
 
         console.print("[dim]Connecting to Polymarket WebSocket...[/dim]\n")
@@ -200,62 +194,25 @@ class OBIApp:
             )
             # Phase 3: Feed trade price to momentum engine for volatility tracking
             self.momentum_engine.update(trade_price=msg.price)
+            # Phase 4: Feed trade to CVD tracker (persists across reconnects)
+            self.cvd_tracker.record_trade(msg)
             # Store trade to database
             if self.db:
                 await self.db.store_trade(self.token_id, msg)
 
-        # Step 3: Compute metrics + run Phase 2 detectors + Phase 3 momentum
+        # Step 3: Compute metrics + run Phase 2 detectors + Phase 3 momentum + Phase 4 intelligence
         if self.orderbook.is_initialized:
             metrics = compute_all_metrics(
                 self.orderbook,
                 self.level_tracker,
                 self.momentum_engine,
+                self.cvd_tracker,
             )
 
-            # Step 4: Generate insights and trade signals
+            # Step 4: Generate insights
             insights = generate_insights(metrics, self._prev_metrics, self.token_label)
-            trade_signals = generate_signals(metrics, self._prev_metrics, self.token_label)
 
-            # Step 4.5: Phase 5 — Strategy evaluation
-            if trade_signals:
-                actions = self.strategy.evaluate(trade_signals, metrics)
-
-                # Log all signals (whether acted on or not)
-                acted_signal_types = {a.get("signal_type") for a in actions if "Entry" in a.get("reason", "")}
-                for sig in trade_signals:
-                    acted = sig.signal_type in acted_signal_types
-                    log_signal(self.market_question, sig, acted)
-
-                for action in actions:
-                    # Log + telegram
-                    if "Entry" in action.get("reason", ""):
-                        log_trade_entry(self.market_question, action)
-                        await self.telegram.send_trade_entry(action)
-                    elif "Exit" in action.get("reason", ""):
-                        log_trade_exit(self.market_question, action)
-                        await self.telegram.send_trade_exit(action)
-
-                # Send high-confidence signal alerts
-                for sig in trade_signals:
-                    if sig.confidence >= 75:
-                        await self.telegram.send_signal(sig)
-
-            # Periodic stats log (every 60s handled by _stats_log_counter)
-            self._stats_log_counter += 1
-            if self._stats_log_counter >= 120:  # ~60s at 0.5s refresh
-                stats = self.strategy.get_stats()
-                log_stats(self.market_question, stats)
-                self._stats_log_counter = 0
-
-            # Hot-reload config every ~5s (10 ticks at 0.5s)
-            if self._stats_log_counter % 10 == 0:
-                if self.live_config.check_reload():
-                    self.strategy.config = self.live_config.get_config()
-
-            # Update UI with strategy stats
-            self.ui.set_strategy_stats(self.strategy.get_stats())
-
-            # Send anomaly alerts
+            # Send anomaly alerts via Telegram
             if metrics.sweep_events and len(metrics.sweep_events) >= 3:
                 await self.telegram.send_anomaly("sweep",
                     f"{len(metrics.sweep_events)} sweeps detected")
@@ -267,11 +224,8 @@ class OBIApp:
                         await self.telegram.send_anomaly("whale",
                             f"Whale {side}: {w.size:,.0f} @ {w.price:.2f} (${val:,.0f})")
 
-            # Periodic state + stats (handled by cooldown inside telegram)
+            # Periodic state update (handled by cooldown inside telegram)
             await self.telegram.send_state_change({}, metrics)
-            stats = self.strategy.get_stats()
-            if stats["total_trades"] > 0:
-                await self.telegram.send_stats(stats)
 
             # Step 5: Store to database (rate-limited)
             if self.db:
@@ -293,8 +247,6 @@ class OBIApp:
             self.ui.update_metrics(metrics)
             if insights:
                 self.ui.add_insights(insights)
-            if trade_signals:
-                self.ui.add_signals(trade_signals)
 
             self._prev_metrics = metrics
 
@@ -368,23 +320,19 @@ class OBIApp:
 
     async def _shutdown(self):
         """Clean shutdown of all components."""
-        # Log final session summary
-        stats = self.strategy.get_stats()
-        log_session_summary(self.market_question, stats)
+        elapsed = int(time.time() - self.ui._start_time)
+        mins, secs = divmod(elapsed, 60)
 
-        # Print results to console
-        console.print(f"\n[bold cyan]═══ SESSION RESULTS ═══[/bold cyan]")
-        console.print(f"  Mode:      [bold]{stats['mode'].upper()}[/bold]")
-        console.print(f"  Trades:    {stats['total_trades']} (W: {stats['wins']} / L: {stats['losses']})")
-        console.print(f"  Win Rate:  {stats['win_rate']:.0%}")
-        console.print(f"  PnL:       [{'green' if stats['total_pnl'] >= 0 else 'red'}]${stats['total_pnl']:+.2f}[/]")
-        console.print(f"  Avg Hold:  {stats['avg_hold_time']:.0f}s")
-        console.print(f"  Signals:   {stats['signals_received']} received, {stats['signals_filtered']} filtered")
-        console.print(f"  Log:       data/logs/trades_{time.strftime('%Y%m%d')}.csv")
+        # Print session summary
+        console.print(f"\n[bold cyan]═══ SESSION SUMMARY ═══[/bold cyan]")
+        console.print(f"  Mode:      [bold]INTELLIGENCE[/bold]")
+        console.print(f"  Duration:  {mins}m {secs}s")
+        console.print(f"  Messages:  {self.ui._messages_count}")
+        console.print(f"  CVD:       {self.cvd_tracker.cumulative:+,.0f} ({self.cvd_tracker.trade_count} trades)")
         console.print(f"[dim]═══════════════════════[/dim]\n")
 
-        # Send final stats via Telegram
-        await self.telegram.send_shutdown(stats)
+        # Send final status via Telegram
+        await self.telegram.send_shutdown({"mode": "intelligence", "duration": elapsed})
         await self.telegram.stop()
 
         if self._ws_client:
