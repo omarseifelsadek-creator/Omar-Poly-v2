@@ -1014,10 +1014,22 @@ async def main():
 
         signal.signal(signal.SIGINT, _headless_stop)
 
+        # return_exceptions=True so one runner's MarketDiscoveryError
+        # (or any other failure) doesn't cancel its siblings. Surface
+        # each error individually so the user knows which timeframe died.
         try:
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
         except asyncio.CancelledError:
-            pass
+            return
+
+        for runner, result in zip(runners, results):
+            if isinstance(result, asyncio.CancelledError) or result is None:
+                continue
+            if isinstance(result, BaseException):
+                console.print(
+                    f"[bold red]✗ {runner.spec.display_name} runner failed:[/bold red] "
+                    f"{type(result).__name__}: {result}"
+                )
         return
 
     # Pair trading mode

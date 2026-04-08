@@ -17,6 +17,7 @@ events. Only 5m and 15m are live.
 
 import time
 import json
+import re
 import asyncio
 import logging
 from typing import Optional, Tuple
@@ -31,6 +32,25 @@ logger = logging.getLogger(__name__)
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
 BINANCE_API = "https://api.binance.com/api/v3"
+
+# Strip non-printable chars before logging upstream HTTP bodies to
+# avoid leaking binary/control payloads into log aggregators.
+_NON_PRINTABLE = re.compile(r"[^\x20-\x7E]")
+
+
+def _safe_text(resp: Optional[httpx.Response]) -> str:
+    """Return response text or empty string, never raising."""
+    if resp is None:
+        return ""
+    try:
+        return resp.text or ""
+    except Exception:
+        return ""
+
+
+def _sanitize_body(body: str, limit: int = 200) -> str:
+    """Strip non-printable chars and truncate for safe logging."""
+    return _NON_PRINTABLE.sub("", body)[:limit]
 
 # Default spec for backward compatibility
 _DEFAULT_SPEC = make_market_spec("btc", "5m")
@@ -300,37 +320,24 @@ async def fetch_market_window(
                     market_id=str(market.get("id", "")),
                 )
 
-        # Loud failure: include full context so users can diagnose
-        body_preview = ""
-        try:
-            body_preview = (resp.text or "")[:400]
-        except Exception:
-            pass
+        # Loud failure: log sanitized context so users can diagnose.
+        # Logger-only (no print) to avoid corrupting Rich terminal output.
+        body_preview = _sanitize_body(_safe_text(resp2))
         logger.warning(
-            f"No market found for slug={event_slug} "
-            f"url={resp.request.url if resp else 'n/a'} "
-            f"status={resp.status_code if resp else 'n/a'} "
-            f"body={body_preview!r}"
-        )
-        print(
-            f"[market_rotator] No market found\n"
-            f"  slug:   {event_slug}\n"
-            f"  url:    {GAMMA_API}/events?slug={event_slug}\n"
-            f"  status: {getattr(resp, 'status_code', 'n/a')}\n"
-            f"  body:   {body_preview[:200]}"
+            "No market found slug=%s events_status=%s markets_status=%s body=%r",
+            event_slug,
+            getattr(resp, "status_code", "n/a"),
+            getattr(resp2, "status_code", "n/a"),
+            body_preview,
         )
         return None
 
     except Exception as e:
+        # Log only exception type — str(e) may embed URLs or internals.
         logger.error(
-            f"Failed to fetch market window slug={event_slug}: "
-            f"{type(e).__name__}: {e}"
-        )
-        print(
-            f"[market_rotator] Exception fetching market window\n"
-            f"  slug:  {event_slug}\n"
-            f"  url:   {GAMMA_API}/events?slug={event_slug}\n"
-            f"  error: {type(e).__name__}: {e}"
+            "Failed to fetch market window slug=%s error_type=%s",
+            event_slug,
+            type(e).__name__,
         )
         return None
 

@@ -3,6 +3,8 @@
 env
 *.env
 .env.*
+# Safe: template file with placeholder values only — never real secrets.
+# Keep this negation last in the credentials block.
 !.env.example
 secrets.py
 
