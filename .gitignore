@@ -3,6 +3,7 @@
 env
 *.env
 .env.*
+!.env.example
 secrets.py
 
 # ── Python cache ──────────────────────────────────────────────────────

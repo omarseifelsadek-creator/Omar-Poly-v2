@@ -11,7 +11,7 @@ Upgrades:
   - Fee rate metadata per window
 
 Usage:
-    python3 main.py --record --asset btc --timeframe 1h
+    python3 main.py --record --asset btc --timeframe 15m
 """
 
 import asyncio

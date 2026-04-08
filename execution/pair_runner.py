@@ -44,6 +44,10 @@ console = Console()
 CHAINLINK_WS = "wss://ws-live-data.polymarket.com"
 
 
+class MarketDiscoveryError(RuntimeError):
+    """Raised when no Polymarket up/down market can be found for a spec."""
+
+
 class ChainlinkTracker:
     """Track crypto price from Polymarket's Chainlink data stream."""
 
@@ -260,8 +264,19 @@ class PairRunner:
             window = await rotator.start()
 
         if not window:
-            console.print("[red]No market found. Check connection.[/red]")
-            return
+            console.print("[red]No market found after retry.[/red]")
+            console.print(
+                f"[red]  Asset:     {self.spec.asset} {self.spec.timeframe}[/red]\n"
+                f"[red]  Slug base: {self.spec.slug_prefix}[/red]\n"
+                f"[red]  See [market_rotator] log lines above for the exact URL/status.[/red]\n"
+                f"[red]  Common causes: timeframe not live on Polymarket, network block, "
+                f"or market not yet published for the current window.[/red]"
+            )
+            raise MarketDiscoveryError(
+                f"No Polymarket up/down market found for "
+                f"{self.spec.asset} {self.spec.timeframe} "
+                f"(slug prefix: {self.spec.slug_prefix})"
+            )
 
         while True:
             self.window = window

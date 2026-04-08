@@ -5,13 +5,14 @@ Computes the current window from UTC time, generates the event slug,
 fetches token IDs from Gamma API, and signals when it's time to rotate
 to the next window.
 
-Supports multiple assets (BTC, ETH, SOL, XRP) and timeframes (5m, 15m, 1h)
+Supports multiple assets (BTC, ETH, SOL, XRP) and timeframes (5m, 15m)
 via the MarketSpec configuration object.
 
-SLUG FORMATS:
-  5m/15m: {asset}-updown-{tf}-{unix}  → btc-updown-5m-1740798600
-  1h:        {name}-up-or-down-{month}-{day}-{hour}{ampm}-et
-             → bitcoin-up-or-down-march-5-5pm-et
+SLUG FORMAT:
+  {asset}-updown-{tf}-{unix}  → btc-updown-5m-1740798600
+
+NOTE: 1h was previously supported but Polymarket deprecated those
+events. Only 5m and 15m are live.
 """
 
 import time
@@ -299,11 +300,38 @@ async def fetch_market_window(
                     market_id=str(market.get("id", "")),
                 )
 
-        logger.warning(f"No market found for {event_slug}")
+        # Loud failure: include full context so users can diagnose
+        body_preview = ""
+        try:
+            body_preview = (resp.text or "")[:400]
+        except Exception:
+            pass
+        logger.warning(
+            f"No market found for slug={event_slug} "
+            f"url={resp.request.url if resp else 'n/a'} "
+            f"status={resp.status_code if resp else 'n/a'} "
+            f"body={body_preview!r}"
+        )
+        print(
+            f"[market_rotator] No market found\n"
+            f"  slug:   {event_slug}\n"
+            f"  url:    {GAMMA_API}/events?slug={event_slug}\n"
+            f"  status: {getattr(resp, 'status_code', 'n/a')}\n"
+            f"  body:   {body_preview[:200]}"
+        )
         return None
 
     except Exception as e:
-        logger.error(f"Failed to fetch market window {event_slug}: {e}")
+        logger.error(
+            f"Failed to fetch market window slug={event_slug}: "
+            f"{type(e).__name__}: {e}"
+        )
+        print(
+            f"[market_rotator] Exception fetching market window\n"
+            f"  slug:  {event_slug}\n"
+            f"  url:   {GAMMA_API}/events?slug={event_slug}\n"
+            f"  error: {type(e).__name__}: {e}"
+        )
         return None
 
 
@@ -315,7 +343,7 @@ class MarketRotator:
 
     Usage:
         from execution.market_spec import make_market_spec
-        spec = make_market_spec("eth", "1h")
+        spec = make_market_spec("eth", "15m")
         rotator = MarketRotator(spec=spec)
         await rotator.start()
 

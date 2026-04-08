@@ -582,7 +582,7 @@ Examples:
     )
     parser.add_argument(
         "--headless", action="store_true",
-        help="No dashboard — run all 3 BTC timeframes simultaneously, log to CSV only",
+        help="No dashboard — run both BTC timeframes (5m + 15m) simultaneously, log to CSV only",
     )
     parser.add_argument(
         "--record", action="store_true",
@@ -595,8 +595,8 @@ Examples:
     )
     parser.add_argument(
         "--timeframe", type=str, default=None,
-        choices=["5m", "15m", "1h"],
-        help="Timeframe for pair trading (5m, 15m, 1h). Skips interactive menu.",
+        choices=["5m", "15m"],
+        help="Timeframe for pair trading (5m, 15m). Skips interactive menu.",
     )
     parser.add_argument(
         "--max-loss", type=float, default=None,
@@ -759,7 +759,6 @@ def select_pair_market():
     _TF_MENU = [
         ("5m",  "5 minutes"),
         ("15m", "15 minutes"),
-        ("1h",  "1 hour"),
     ]
     _MODE_MENU = [
         ("paper",   "Paper",   "Simulated fills, no auth needed"),
@@ -950,7 +949,7 @@ async def main():
         from execution.book_recorder import BookRecorder
         from execution.market_spec import make_market_spec
 
-        spec = make_market_spec(args.asset or "btc", args.timeframe or "1h")
+        spec = make_market_spec(args.asset or "btc", args.timeframe or "5m")
         recorder = BookRecorder(spec=spec)
 
         import signal
@@ -959,14 +958,14 @@ async def main():
         await recorder.run()
         return
 
-    # Headless multi-runner: all 3 BTC timeframes simultaneously, no dashboard
+    # Headless multi-runner: both BTC timeframes simultaneously, no dashboard
     if args.headless:
         from execution.pair_runner import PairRunner
         from execution.market_spec import make_market_spec
 
         asset = args.asset or "btc"
         mode = args.mode
-        timeframes = ["5m", "15m", "1h"]
+        timeframes = ["5m", "15m"]
 
         if args.timeframe:
             # Single headless runner for specific timeframe
