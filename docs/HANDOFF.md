@@ -18,7 +18,7 @@ Phases 1+2 of the B-fix plan landed (live safety + resilience). Remaining: EXP-0
 
 ## Next Steps (in order)
 
-1. EXP-002 **is running** (started 2026-06-10 18:22, pid in `/tmp/exp002.pid`, log: `data/logs/exp002_run.log`). Morning: `kill -INT $(cat /tmp/exp002.pid)`, wait for settle, then compute baseline stats from `pair_windows_20260610/11.csv` → close the entry in STRATEGY_LOG Part 2.
+1. EXP-002 **is running in Omar's own terminal** (foreground, started ~2026-06-10 18:25; btc 5m+15m paper). Morning: Omar presses Ctrl+C once, waits for settle. Then compute baseline stats from `pair_windows_20260610/11.csv` → close the entry in STRATEGY_LOG Part 2. NOTE: exclude windows settled before 18:25 on Jun 10 — those are from a discarded 10-min Claude-launched run.
 2. B12: `[pairs]` section in strategy.conf → PairConfig (hot-reload like the existing LiveConfig pattern).
 3. Phase 3: analytics test suite (metrics/detectors/momentum/cvd pure functions).
 4. Phase 4: split main.py → modes/, extract WindowSettler + SessionStats from pair_runner.
