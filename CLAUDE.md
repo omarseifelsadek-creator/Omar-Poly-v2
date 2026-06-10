@@ -3,10 +3,28 @@
 Async Python trading bot for prediction markets. Real-time order book analysis
 via WebSocket, multi-phase signal generation, paper/dry-run/live execution.
 
+## Session Protocol
+
+**Session start:** read `docs/HANDOFF.md`, then the "Now" section of `docs/BACKLOG.md`, before doing anything else.
+
+**During work:** reference backlog IDs (B1, B2, …) in commit messages. Before touching strategy parameters, read the relevant registry entry in `docs/STRATEGY_LOG.md`.
+
+**Session end, after any major milestone, or when Omar says "handoff":** rewrite `docs/HANDOFF.md` (overwrite, never append, ≤60 lines), tick/move BACKLOG items, append a STRATEGY_LOG experiment entry if an experiment concluded. Refresh proactively after milestones — sessions often end by abandonment, not cleanly. Commit HANDOFF.md together with the work it describes.
+
+### Docs Map
+
+| File | Purpose | Update when |
+|------|---------|-------------|
+| `docs/HANDOFF.md` | Where things stand right now | Every session (overwrite) |
+| `docs/BACKLOG.md` | Prioritized work items, stable IDs | Whenever work happens |
+| `docs/STRATEGY_LOG.md` | Strategy registry + experiment lab notebook | Per experiment |
+| `docs/RUNBOOK.md` | Paper→dry-run→live procedure, recovery | Procedure changes only |
+| `docs/AUDIT-2026-06-10.md` | Frozen audit snapshot (evidence for backlog) | Never |
+
 ## How to Run
 
 ```bash
-source env/bin/activate
+source venv/bin/activate
 
 # Interactive market selector
 python main.py
@@ -20,9 +38,9 @@ python main.py --search "keyword"
 python main.py --btc5m [--btc5m-side auto|up|down]
 
 # Pair trading (YES+NO accumulation)
-python main.py --pairs [--asset btc|eth|sol|xrp] [--timeframe 5m|15m|1h]
+python main.py --pairs [--asset btc|eth|sol|xrp] [--timeframe 5m|15m]
 
-# Headless (no dashboard, CSV logging only, all 3 BTC timeframes)
+# Headless (no dashboard, CSV logging only, both BTC timeframes: 5m + 15m)
 python main.py --headless
 
 # Record L2 snapshots for backtesting
@@ -108,7 +126,10 @@ Central data structure flowing through the entire pipeline (`analytics/metrics.p
 
 - `OBI_TELEGRAM_TOKEN` — Telegram bot token (optional)
 - `OBI_TELEGRAM_CHAT_ID` — Telegram chat ID (optional)
-- No auth needed for read-only market data APIs
+- No auth needed for read-only market data APIs (paper mode needs no credentials)
+- **Live/dry-run trading** requires five vars in `.env` (see `.env.example` + `docs/RUNBOOK.md` §2):
+  `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_API_SECRET`, `POLY_API_PASSPHRASE`, `POLY_FUNDER`
+- Live/dry-run also requires the `py-clob-client` package (in requirements.txt); paper mode runs without it
 
 ## Common Tasks
 
@@ -124,6 +145,9 @@ Central data structure flowing through the entire pipeline (`analytics/metrics.p
 ## Critical Warnings
 
 - **NEVER** use `--mode live` without paper testing first
+- **strategy.conf is largely IGNORED in `--pairs` mode** — it configures the intelligence dashboard
+  (`StrategyEngine`); pair-trading params are hardcoded in `execution/pair_runner.py` (`PairConfig`).
+  Tuning the conf and expecting pairs behavior to change is a trap (backlog B12).
 - **Polymarket fee curve**: `price * (1 - price) * 0.0625` (~3.12% round-trip at 50c)
 - **WebSocket reconnection** uses exponential backoff — don't add aggressive retries
 - **Signal/insight dedup** is module-level state: persists within session, resets on restart
