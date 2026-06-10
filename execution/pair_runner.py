@@ -657,7 +657,9 @@ class PairRunner:
                 self.no_book, self.no_tracker, self.no_momentum
             )
         except Exception:
-            pass
+            # Stale metrics mean OBI/flow filters run on defaults — say so
+            # instead of degrading silently.
+            logger.exception("Metrics computation failed — signal filters using last/default values")
 
         # Get OBI and flow for filtering
         obi = self.yes_metrics.obi if self.yes_metrics and self.yes_metrics.obi is not None else 0.5
@@ -674,9 +676,8 @@ class PairRunner:
             sweep_side = "NO"
 
         # Cap unmatched exposure — prevent runaway one-sided positions
-        # TEMP: $10 for live test (was $30)
         unmatched_usd = abs(self.engine.yes_cost - self.engine.no_cost)
-        if unmatched_usd > 30.0:
+        if unmatched_usd > self.engine.config.max_unmatched_usd:
             return
 
         # Snapshot engine state BEFORE evaluate() so LiveExecutor can roll
@@ -775,126 +776,126 @@ class PairRunner:
             )
             return   # engine state already rolled back
 
-            # Track confirmed live fill for live PnL
-            if action.get("mode") == "LIVE":
-                self._live_fills.append({
-                    "side": action["side"],
-                    "qty": float(action["qty"]),
-                    "price": float(action["vwap_price"]),
-                    "cost": float(action["cost"]),
-                })
-
-            # ── Compute quant context for logging ──────────────────
-            raw = action.get("raw_price", 0)
-            t_rem = self.engine.time_remaining
-            if t_rem < self.engine.config.panic_time_seconds:
-                zone = "Panic"
-            elif raw <= 0.35:
-                zone = "Sniper"
-            elif raw <= 0.44:
-                zone = "Value"
-            else:
-                zone = "Panic"
-            self._zone_counts[zone] = self._zone_counts.get(zone, 0) + 1
-
-            fill_side = action.get("side", "")
-            opp_side = "NO" if fill_side == "YES" else "YES"
-            opposite_ask = no_ask if fill_side == "YES" else yes_ask
-            best_bid = yes_bid if fill_side == "YES" else no_bid
-            spread = (action.get("raw_price", 0) - best_bid) if best_bid else 0
-
-            # Time-to-Hedge: seconds from earliest opposite leg to this fill
-            opp_legs = [l for l in self.engine.legs[:-1] if l.side == opp_side]
-            time_to_hedge = (
-                round(time.time() - opp_legs[0].timestamp, 1) if opp_legs else None
-            )
-            if time_to_hedge is not None:
-                self._hedge_times.append(time_to_hedge)
-
-            # Capital exhaustion: first moment total deployed >= cap
-            if (self._capital_exhausted_time is None and
-                    self.engine.total_capital >= self.engine.config.max_position_usd):
-                self._capital_exhausted_time = int(
-                    self.engine.window_duration - self.engine.time_remaining
-                )
-
-            # Max unhedged exposure: peak $ held in a single unbalanced leg
-            y_qty = self.engine.yes_qty
-            n_qty = self.engine.no_qty
-            if y_qty > n_qty and y_qty > 0:
-                unhedged = (y_qty - n_qty) * (self.engine.yes_cost / y_qty)
-            elif n_qty > y_qty and n_qty > 0:
-                unhedged = (n_qty - y_qty) * (self.engine.no_cost / n_qty)
-            else:
-                unhedged = 0.0
-            self._max_unhedged_exposure = max(self._max_unhedged_exposure, unhedged)
-
-            # Slippage tracking
-            vwap = action.get("vwap_price", raw)
-            slippage_cents = round((vwap - raw) * 100, 2) if raw else 0
-            self._slippages.append(slippage_cents)
-
-            # Build context dict for CSV logging
-            fill_ctx = {
-                "zone": zone,
-                "obi": obi,
-                "flow_pressure": flow,
-                "has_sweep": has_sweep,
-                "sweep_side": sweep_side,
-                "opposite_ask": opposite_ask or 0,
-                "best_bid": best_bid or 0,
-                "spread": spread,
-                "yes_bid_depth": self.yes_book.total_bid_depth,
-                "yes_ask_depth": self.yes_book.total_ask_depth,
-                "no_bid_depth": self.no_book.total_bid_depth,
-                "no_ask_depth": self.no_book.total_ask_depth,
-                "time_to_hedge_s": time_to_hedge if time_to_hedge is not None else "N/A",
-                "unhedged_usd": unhedged,
-            }
-
-            # Log the buy with full quant context
-            market_label = f"{self.spec.display_name_long} — {self.window.time_label}" if self.window else self.spec.display_name
-            fee_pct = polymarket_taker_fee(action["raw_price"]) * 100
-            action["fee_pct"] = fee_pct
-
-            log_pair_buy(market_label, action, self.engine.get_stats(),
-                         ctx=fill_ctx, mode=action.get("mode", "PAPER"))
-
-            # Track for dashboard (keep last 10)
-            action["timestamp"] = time.time()
-            self._recent_buys_display.append(action)
-            if len(self._recent_buys_display) > 10:
-                self._recent_buys_display = self._recent_buys_display[-10:]
-
-            # Track for hourly report
-            self._report_fills.append({
-                "timestamp": time.strftime("%H:%M:%S"),
-                "window_id": self.window.time_label if self.window else "",
-                "token": fill_side,
-                "shares": action.get("qty", 0),
-                "zone": zone,
-                "quoted_ask": raw,
-                "vwap_fill": action.get("vwap_price", raw),
-                "fee_pct": f"{action.get('fee_pct', 0):.2f}%",
-                "opposite_leg_ask": f"{opposite_ask:.4f}" if opposite_ask else "N/A",
-                "ask_age_ms": round(action.get("ask_age_ms", 0)),
-                "obi_ratio": round(obi, 3),
-                "time_to_hedge_sec": time_to_hedge if time_to_hedge is not None else "N/A",
+        # Track confirmed live fill for live PnL
+        if action.get("mode") == "LIVE":
+            self._live_fills.append({
+                "side": action["side"],
+                "qty": float(action["qty"]),
+                "price": float(action["vwap_price"]),
+                "cost": float(action["cost"]),
             })
 
-            # Console output (only when dashboard is not active)
-            if not self._live:
-                side = action["side"]
-                color = "green" if side == "YES" else "red"
-                snipe = " 🎯" if action.get("is_snipe") else ""
-                vwap = action.get("vwap_price", action.get("fill_price", 0))
-                console.print(
-                    f"  [{color}]BUY {action['qty']:.0f} {side}[/{color}] "
-                    f"@ VWAP ${vwap:.3f} "
-                    f"(fill: ${action['fill_price']:.4f}) | "
-                    f"Pairs: {self.engine.matched_pairs:.0f} "
-                    f"Cost: ${self.engine.pair_cost:.4f}"
-                )
+        # ── Compute quant context for logging ──────────────────
+        raw = action.get("raw_price", 0)
+        t_rem = self.engine.time_remaining
+        if t_rem < self.engine.config.panic_time_seconds:
+            zone = "Panic"
+        elif raw <= 0.35:
+            zone = "Sniper"
+        elif raw <= 0.44:
+            zone = "Value"
+        else:
+            zone = "Dead"
+        self._zone_counts[zone] = self._zone_counts.get(zone, 0) + 1
+
+        fill_side = action.get("side", "")
+        opp_side = "NO" if fill_side == "YES" else "YES"
+        opposite_ask = no_ask if fill_side == "YES" else yes_ask
+        best_bid = yes_bid if fill_side == "YES" else no_bid
+        spread = (action.get("raw_price", 0) - best_bid) if best_bid else 0
+
+        # Time-to-Hedge: seconds from earliest opposite leg to this fill
+        opp_legs = [l for l in self.engine.legs[:-1] if l.side == opp_side]
+        time_to_hedge = (
+            round(time.time() - opp_legs[0].timestamp, 1) if opp_legs else None
+        )
+        if time_to_hedge is not None:
+            self._hedge_times.append(time_to_hedge)
+
+        # Capital exhaustion: first moment total deployed >= cap
+        if (self._capital_exhausted_time is None and
+                self.engine.total_capital >= self.engine.config.max_position_usd):
+            self._capital_exhausted_time = int(
+                self.engine.window_duration - self.engine.time_remaining
+            )
+
+        # Max unhedged exposure: peak $ held in a single unbalanced leg
+        y_qty = self.engine.yes_qty
+        n_qty = self.engine.no_qty
+        if y_qty > n_qty and y_qty > 0:
+            unhedged = (y_qty - n_qty) * (self.engine.yes_cost / y_qty)
+        elif n_qty > y_qty and n_qty > 0:
+            unhedged = (n_qty - y_qty) * (self.engine.no_cost / n_qty)
+        else:
+            unhedged = 0.0
+        self._max_unhedged_exposure = max(self._max_unhedged_exposure, unhedged)
+
+        # Slippage tracking
+        vwap = action.get("vwap_price", raw)
+        slippage_cents = round((vwap - raw) * 100, 2) if raw else 0
+        self._slippages.append(slippage_cents)
+
+        # Build context dict for CSV logging
+        fill_ctx = {
+            "zone": zone,
+            "obi": obi,
+            "flow_pressure": flow,
+            "has_sweep": has_sweep,
+            "sweep_side": sweep_side,
+            "opposite_ask": opposite_ask or 0,
+            "best_bid": best_bid or 0,
+            "spread": spread,
+            "yes_bid_depth": self.yes_book.total_bid_depth,
+            "yes_ask_depth": self.yes_book.total_ask_depth,
+            "no_bid_depth": self.no_book.total_bid_depth,
+            "no_ask_depth": self.no_book.total_ask_depth,
+            "time_to_hedge_s": time_to_hedge if time_to_hedge is not None else "N/A",
+            "unhedged_usd": unhedged,
+        }
+
+        # Log the buy with full quant context
+        market_label = f"{self.spec.display_name_long} — {self.window.time_label}" if self.window else self.spec.display_name
+        fee_pct = polymarket_taker_fee(action["raw_price"]) * 100
+        action["fee_pct"] = fee_pct
+
+        log_pair_buy(market_label, action, self.engine.get_stats(),
+                     ctx=fill_ctx, mode=action.get("mode", "PAPER"))
+
+        # Track for dashboard (keep last 10)
+        action["timestamp"] = time.time()
+        self._recent_buys_display.append(action)
+        if len(self._recent_buys_display) > 10:
+            self._recent_buys_display = self._recent_buys_display[-10:]
+
+        # Track for hourly report
+        self._report_fills.append({
+            "timestamp": time.strftime("%H:%M:%S"),
+            "window_id": self.window.time_label if self.window else "",
+            "token": fill_side,
+            "shares": action.get("qty", 0),
+            "zone": zone,
+            "quoted_ask": raw,
+            "vwap_fill": action.get("vwap_price", raw),
+            "fee_pct": f"{action.get('fee_pct', 0):.2f}%",
+            "opposite_leg_ask": f"{opposite_ask:.4f}" if opposite_ask else "N/A",
+            "ask_age_ms": round(action.get("ask_age_ms", 0)),
+            "obi_ratio": round(obi, 3),
+            "time_to_hedge_sec": time_to_hedge if time_to_hedge is not None else "N/A",
+        })
+
+        # Console output (only when dashboard is not active)
+        if not self._live:
+            side = action["side"]
+            color = "green" if side == "YES" else "red"
+            snipe = " 🎯" if action.get("is_snipe") else ""
+            vwap = action.get("vwap_price", action.get("fill_price", 0))
+            console.print(
+                f"  [{color}]BUY {action['qty']:.0f} {side}[/{color}] "
+                f"@ VWAP ${vwap:.3f} "
+                f"(fill: ${action['fill_price']:.4f}) | "
+                f"Pairs: {self.engine.matched_pairs:.0f} "
+                f"Cost: ${self.engine.pair_cost:.4f}"
+            )
 
     async def _rotation_watchdog(self):
         """Watch for window expiry."""

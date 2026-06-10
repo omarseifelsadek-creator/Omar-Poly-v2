@@ -155,6 +155,7 @@ class PairConfig:
     buy_size_usd: float = 10.0
     max_position_usd: float = 100.0
     panic_max_position_usd: float = 116.0
+    max_unmatched_usd: float = 30.0        # Cap on |yes_cost - no_cost| one-sided exposure
 
     max_skew_pct: float = 0.50             # Gemini #3: 50% single-side skew cap
     min_first_leg_price: float = 0.15
