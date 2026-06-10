@@ -21,7 +21,7 @@
 
 ## Later (P2 — structural / hygiene)
 
-- [ ] B10 · Delete `env/` (venv/ is canonical); prune `claude/youthful-allen` branch + leftover worktree, `claude/thirsty-tesla`.
+- [ ] B10 · Delete `venv/` (`env/` is canonical — it has the trading deps); prune `claude/youthful-allen` branch + leftover worktree, `claude/thirsty-tesla`.
 - [ ] B11 · Retire superseded scripts to `research/legacy/`: `quant_dashboard.py`, `generate_report.py` (audit S8).
 - [ ] B12 · Make a `[pairs]` config section actually drive pairs mode — params currently hardcoded in `pair_runner.py` (audit S3).
 - [ ] B13 · Split `main.py` (1102 lines / 6 modes) and `pair_runner.py` (1278 lines) (audit S1/S2).

@@ -1,4 +1,6 @@
-"""Generate a formatted Excel trade report from the OBI trade log CSV."""
+"""LEGACY — superseded by generate_pair_report.py (repo root). Kept for reference.
+
+Generate a formatted Excel trade report from the OBI trade log CSV."""
 import csv
 import os
 import glob

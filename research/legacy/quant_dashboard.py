@@ -1,3 +1,5 @@
+"""LEGACY — superseded by streamlit_dashboard.py (repo root). Kept for reference.
+Requires scikit-learn, which is intentionally NOT in requirements.txt."""
 import streamlit as st
 import pandas as pd
 import numpy as np

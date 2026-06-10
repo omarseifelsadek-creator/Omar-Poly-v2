@@ -24,7 +24,7 @@ via WebSocket, multi-phase signal generation, paper/dry-run/live execution.
 ## How to Run
 
 ```bash
-source venv/bin/activate
+source env/bin/activate   # canonical local venv (has py-clob-client for live trading)
 
 # Interactive market selector
 python main.py

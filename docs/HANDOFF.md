@@ -28,7 +28,7 @@ Revamp after 2-month gap: audit done, workflow docs created; now fixing the crit
 
 - Don't add sklearn to requirements — its only user (`quant_dashboard.py`) is being retired to `research/legacy/`.
 - `ui/cyber_engine.py` is NOT orphaned (default no-flag mode via `main.py:1049`) — do not delete.
-- Two venvs exist until Phase C: only `venv/` is valid.
+- Two venvs exist until Phase C: **`env/` is canonical** (has py-clob-client); `venv/` is an incomplete fresh-install — delete it.
 
 ## Open Questions (for Omar)
 

@@ -35,3 +35,6 @@ data/logs/
 .idea/
 .vscode/
 *.swp
+
+# Pytest
+.pytest_cache/
