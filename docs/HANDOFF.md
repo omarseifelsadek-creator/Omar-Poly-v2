@@ -3,33 +3,40 @@
 > Claude: read this FIRST each session. Overwrite (don't append) at session end or after any
 > major milestone. Keep under 60 lines — git history is the archive.
 
-**Updated:** 2026-06-10 · **Branch:** main · **Last mode run:** none this session
+**Updated:** 2026-06-10 · **Branch:** main · **Last mode run:** paper (BTC/5m headless verification runs)
 
 ## Current Focus
 
-Revamp after 2-month gap: audit done, workflow docs created; now fixing the critical bugs (B1-B6) so experiment data is trustworthy.
+Revamp complete (audit → docs system → critical fixes → hygiene). Next: a long paper session to
+baseline PAIRS-v15 (EXP-002), then new-strategy development on top of the intelligence layer.
 
 ## State of the World
 
-- Full audit completed 2026-06-10 → [AUDIT-2026-06-10.md](AUDIT-2026-06-10.md); backlog seeded with IDs.
-- **Fill logging is broken (B1)**: no CSV buys, no live P&L tracking — every session since the regression produced no fill data. Omar is trading live; recommended pause until B1+B5+B6 land.
-- Pairs engine (v15 + Gemini patches) is otherwise healthy; live order path (EIP-712/FOK/Magic wallet) verified correct.
-- Trap: `strategy.conf` is ignored in `--pairs` mode — pair params are hardcoded in `pair_runner.py` (B12).
+- All P0 bugs fixed and committed (B1-B6): fill logging restored + regression-tested, live-mode
+  startup gates, deps complete. Hygiene done (B10/B11): one venv (`env/`), stale branches pruned.
+- **Fill data from Mar 4 → Jun 10 is empty/untrustworthy** (regression window — see STRATEGY_LOG
+  version history). Only Mar 2-3 and post-Jun-10 CSVs are real.
+- First test exists: `tests/test_fill_logging.py` (pytest in `env/`). Run before sessions.
+- Live trading gates per RUNBOOK §1: **B7 + B8 still open** — they are the prerequisites for
+  resuming live. Until then: paper/dry-run only is the recommendation.
+- EXP-001 (re-baseline) is ITERATE — verification runs clean; needs n ≥ 50 windows (EXP-002).
 
 ## Next Steps (in order)
 
-1. B1 — dedent `pair_runner.py:778-897` out of the rejection branch; fix zone `"Panic"`→`"Dead"` at :797.
-2. B2 — `main.py:187`: derive level side from `msg.side` (BUY→ASK, SELL→BID per `level_tracker.py:274`).
-3. B3 — requirements.txt: add `py-clob-client`, `openpyxl`.
-4. B4 — bound dedup dicts in `analytics/interpreter.py:35` + `analytics/signals.py:59`.
-5. B5+B6 — eager `.env` validation in `LiveExecutor.__init__` + typed live-mode confirmation gate in `main.py`.
+1. EXP-002: overnight/multi-hour paper run (`--headless`, 5m + 15m), then close it in STRATEGY_LOG
+   with net_pnl/window, pairs/window, rejection_rate from `pair_windows_*.csv`.
+2. B7 — executor exception guard + engine/CLOB resync (`pair_runner.py:740` area).
+3. B8 — kill-switch pre-entry check (`pair_runner.py` settle loop + `_try_evaluate`).
+4. Then: live re-enable decision per RUNBOOK ladder.
+5. New-strategy ideation → BACKLOG "Ideas" → graduate to EXP entries.
 
 ## Watch Out
 
-- Don't add sklearn to requirements — its only user (`quant_dashboard.py`) is being retired to `research/legacy/`.
-- `ui/cyber_engine.py` is NOT orphaned (default no-flag mode via `main.py:1049`) — do not delete.
-- Two venvs exist until Phase C: **`env/` is canonical** (has py-clob-client); `venv/` is an incomplete fresh-install — delete it.
+- `strategy.conf` does NOT drive pairs mode — v15 params live in `pair_runner.py:164` (B12).
+- `ui/cyber_engine.py` is NOT orphaned — it's the default no-flag visualization mode.
+- macOS has no `timeout` command — background runs use `& PID=$!; sleep N; kill` pattern.
 
 ## Open Questions (for Omar)
 
-- Pause live trading until B7/B8 (desync guard, kill-switch timing) also land, or resume after B1-B6?
+- Resume live only after B7+B8 (recommended), or earlier with small size and the known risks?
+- Which asset/timeframe should EXP-002 baseline prioritize (BTC 5m+15m assumed)?
