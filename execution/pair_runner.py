@@ -805,13 +805,18 @@ class PairRunner:
             # halt new entries for the rest of this window.
             if isinstance(action, dict) and action.get("ambiguous"):
                 self._halt_entries = action.get("status", "ambiguous")
+                # Budget the unknown outcome as lost until verified — the
+                # engine rolled back, so settlement won't see this cost,
+                # but real money may be committed on the CLOB.
+                self.kill_switch.note_unverified(float(orig_action.get("cost", 0)))
                 console.print(
                     f"\n[bold red]  ⚠ AMBIGUOUS LIVE ORDER ({self._halt_entries}) — "
                     f"halting entries for this window. Verify positions on "
                     f"polymarket.com before the next window.[/bold red]"
                 )
                 logger.error(
-                    f"[{self.spec.display_name}] entries halted: {self._halt_entries}"
+                    f"[{self.spec.display_name}] entries halted: {self._halt_entries} "
+                    f"(${float(orig_action.get('cost', 0)):.2f} counted as unverified risk)"
                 )
             # Log CLOB rejection with full context
             market_label = (

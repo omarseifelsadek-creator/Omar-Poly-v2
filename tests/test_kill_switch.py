@@ -53,3 +53,15 @@ def test_near_limit_warns_exactly_once():
     assert ks.near_limit()          # 80% — warns
     ks.record(-5)
     assert not ks.near_limit()      # already warned — stays quiet
+
+
+def test_unverified_risk_counts_as_lost():
+    # An ambiguous order's cost is budgeted as lost until verified —
+    # the engine rolled back, so realized P&L never sees it.
+    ks = KillSwitch(max_loss=50)
+    ks.record(-44)
+    assert not ks.tripped()
+    ks.note_unverified(6.0)
+    assert ks.tripped()
+    ks.note_unverified(-5.0)        # negative input clamped, never reduces risk
+    assert ks.tripped()

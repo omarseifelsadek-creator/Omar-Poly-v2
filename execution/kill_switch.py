@@ -30,15 +30,24 @@ class KillSwitch:
     def __init__(self, max_loss: Optional[float]):
         self.max_loss = max_loss
         self.realized_pnl: float = 0.0
+        # Capital whose live outcome is UNKNOWN (ambiguous order that could
+        # not be reconciled). The engine rolled back, so realized_pnl does
+        # not see it — but real money may be at risk on the CLOB. Counted
+        # as lost in every projection until verified manually.
+        self.unverified_risk: float = 0.0
         self._warned = False
 
     def record(self, pnl: float) -> None:
         """Add a settled window's net P&L to the shared budget."""
         self.realized_pnl += pnl
 
+    def note_unverified(self, cost: float) -> None:
+        """Register the cost of an order whose fill status is unknown."""
+        self.unverified_risk += max(0.0, cost)
+
     def projected_pnl(self, unrealized_risk: float = 0.0) -> float:
         """Worst-case session P&L if the at-risk capital goes to zero."""
-        return self.realized_pnl - max(0.0, unrealized_risk)
+        return self.realized_pnl - max(0.0, unrealized_risk) - self.unverified_risk
 
     def tripped(self, unrealized_risk: float = 0.0) -> bool:
         """True when the projected worst case breaches the cap."""

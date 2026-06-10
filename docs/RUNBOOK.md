@@ -43,7 +43,16 @@
 
 ## 3. Kill Switch & Emergency Stop
 
-- `--max-loss N` halts new windows once cumulative session P&L ≤ −N (post-settlement check; B8).
+- `--max-loss N` is checked **before every entry** (projected worst case: realized session P&L
+  minus current unmatched exposure minus any unverified ambiguous cost) and again after each
+  settlement. One warning fires at 80% of the cap. In headless mode the budget is **shared
+  across all runners** — N caps the session, not each timeframe. (B8)
+- **Ambiguous-order caveat:** if a live submission ends "AMBIGUOUS" and cannot be reconciled,
+  its cost is counted as lost in the kill-switch projection and entries halt for that window —
+  but the true P&L is unknown until you **verify positions on polymarket.com**. Treat the cap
+  as approximate from that moment until verified. (B7)
+- Two separate `--pairs` processes in different terminals do NOT share a budget — use
+  `--headless` for multi-timeframe sessions.
 - **Ctrl+C (once)** = graceful: finishes the current window, settles, flushes reports.
   In headless mode the runner may sit in settlement for ~30s — it is not hung (H7).
 - **Ctrl+C (twice)** = force-cancel all runners (headless mode).

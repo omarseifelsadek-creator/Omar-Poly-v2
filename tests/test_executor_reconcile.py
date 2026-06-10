@@ -180,3 +180,41 @@ def test_match_trade_filters_side_status_and_size():
     match = LiveExecutor._match_trade(trades, qty=20.0)  # 2.5% diff < 5% tol
     assert match is not None and match["id"] == "ok"
     assert LiveExecutor._match_trade(trades[:4], qty=20.0) is None
+
+
+def test_match_trade_rejects_fills_older_than_submission():
+    # A same-size fill from BEFORE the ambiguous submission must not be
+    # adopted as this order's fill — that double-counts the position.
+    old_fill = {"side": "BUY", "size": "20", "status": "MATCHED",
+                "match_time": "1000", "id": "old"}
+    new_fill = {"side": "BUY", "size": "20", "status": "MATCHED",
+                "match_time": "1010", "id": "new"}
+
+    assert LiveExecutor._match_trade([old_fill], qty=20.0, submitted_at=1008.0) is None
+    match = LiveExecutor._match_trade([old_fill, new_fill], qty=20.0, submitted_at=1008.0)
+    assert match is not None and match["id"] == "new"
+    # missing/unparseable match_time falls back to the server-side `after` filter
+    no_ts = {"side": "BUY", "size": "20", "status": "MATCHED", "id": "no-ts"}
+    assert LiveExecutor._match_trade([no_ts], qty=20.0, submitted_at=1008.0) is not None
+
+
+def test_reconcile_query_timeout_is_survivable(executor, monkeypatch):
+    # A hung get_trades must not hang reconciliation forever — each
+    # attempt is bounded by LIVE_RECONCILE_QUERY_TIMEOUT_SECONDS and a
+    # timeout counts as "no confirmation" (rollback + ambiguous).
+    import time as _time
+
+    class HangingClob:
+        get_trades_calls = 0
+        def get_trades(self, params=None, next_cursor="MA=="):
+            HangingClob.get_trades_calls += 1
+            _time.sleep(5)   # far past the patched timeout
+            return []
+
+    monkeypatch.setattr(settings, "LIVE_RECONCILE_QUERY_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(settings, "LIVE_RECONCILE_ATTEMPTS", 1)
+    _stub_post(executor, exc=TimeoutError("relayer timeout"))
+    result, engine = _run(executor, HangingClob())
+
+    assert result["rejected"] and result["ambiguous"]
+    assert engine.yes_qty == 0.0

@@ -483,26 +483,43 @@ class LiveExecutor(BaseExecutor):
     ) -> Optional[dict]:
         """Poll get_trades for a BUY of ~qty in this token since submission."""
         loop = asyncio.get_running_loop()
-        params = TradeParams(asset_id=token_id, after=int(submitted_at) - 2)
+        # `after` is server-side and bounds pagination to our last ~1s of
+        # trades. Do NOT widen it: a slack window can match an EARLIER
+        # fill for the same token/qty and double-count it (review finding).
+        params = TradeParams(asset_id=token_id, after=int(submitted_at))
 
         for attempt in range(settings.LIVE_RECONCILE_ATTEMPTS):
             if attempt > 0:
                 await asyncio.sleep(settings.LIVE_RECONCILE_DELAY_SECONDS)
             try:
-                trades = await loop.run_in_executor(
-                    None, lambda: self._client.get_trades(params)
+                # Timeout guards against pathological pagination (the client
+                # pages until END_CURSOR internally) and hung connections.
+                trades = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None, lambda: self._client.get_trades(params)
+                    ),
+                    timeout=settings.LIVE_RECONCILE_QUERY_TIMEOUT_SECONDS,
                 )
+            except asyncio.TimeoutError:
+                logger.error("[LIVE] Reconciliation query timed out")
+                continue
             except Exception:
                 logger.exception("[LIVE] Reconciliation query failed")
                 continue
-            match = self._match_trade(trades or [], qty)
+            match = self._match_trade(trades or [], qty, submitted_at)
             if match is not None:
                 return match
         return None
 
     @staticmethod
-    def _match_trade(trades: list, qty: float) -> Optional[dict]:
-        """Find a non-failed BUY trade whose size matches qty within tolerance."""
+    def _match_trade(
+        trades: list, qty: float, submitted_at: float = 0.0
+    ) -> Optional[dict]:
+        """
+        Find a non-failed BUY trade whose size matches qty within tolerance
+        and whose match_time is not older than the submission (a same-size
+        fill from moments earlier must not be adopted as this order's).
+        """
         tolerance = settings.LIVE_RECONCILE_QTY_TOLERANCE
         for trade in trades:
             if not isinstance(trade, dict):
@@ -515,8 +532,16 @@ class LiveExecutor(BaseExecutor):
                 size = float(trade.get("size", 0))
             except (TypeError, ValueError):
                 continue
-            if qty > 0 and abs(size - qty) / qty <= tolerance:
-                return trade
+            if not (qty > 0 and abs(size - qty) / qty <= tolerance):
+                continue
+            match_time = trade.get("match_time") or trade.get("matchtime")
+            if match_time is not None and submitted_at > 0:
+                try:
+                    if float(match_time) < submitted_at - 1:
+                        continue   # older fill — not ours
+                except (TypeError, ValueError):
+                    pass           # unparseable timestamp: rely on `after`
+            return trade
         return None
 
 

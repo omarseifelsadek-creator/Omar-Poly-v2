@@ -186,6 +186,7 @@ UI_MAX_TRADES: int = 10
 LIVE_RECONCILE_ATTEMPTS: int = 3
 LIVE_RECONCILE_DELAY_SECONDS: float = 1.5
 LIVE_RECONCILE_QTY_TOLERANCE: float = 0.05       # ±5% size match
+LIVE_RECONCILE_QUERY_TIMEOUT_SECONDS: float = 10.0
 
 # Message-loop crash escalation: end the window instead of reconnect-
 # spinning after this many consecutive crashes with no progress.
