@@ -9,10 +9,7 @@
 
 ## Next (P1)
 
-- [ ] B9 · Narrow WebSocket exception handling — distinguish auth failure (alert) vs transient timeout (backoff) (audit H5).
 - [ ] B12 · Make a `[pairs]` config section actually drive pairs mode — params hardcoded in `pair_runner.py` (audit S3). Pull forward before any param-tuning experiments.
-- [ ] B16 · DB write-queue overflow: add dropped-write counter + throttled warning + surface in stats (audit S6; warning log already exists).
-- [ ] B18 · Headless Ctrl+C: "settling…" feedback + settlement deadline after stop requested (audit H7).
 
 ## Later (P2 — structural)
 
@@ -26,6 +23,9 @@
 
 ## Done
 
+- [x] 2026-06-10 · B9 · WebSocket failures classified: 401/403/429 handshake rejections log loudly + jump to max backoff; closes/network errors keep normal backoff; callback errors get tracebacks.
+- [x] 2026-06-10 · B16 · DB queue overflow: dropped-write counter, warning throttled to 1/min, total surfaced in get_stats + close summary.
+- [x] 2026-06-10 · B18 · Settlement under Ctrl+C prints "settling… Ctrl+C again to force" and caps Gamma polling at 60s (book fallback still settles).
 - [x] 2026-06-10 · B7 · Fill-ambiguity reconciliation: ambiguous live submissions poll own trade history — adopt confirmed fills, else rollback + halt window. Message-loop crashes now logged loudly + end window after 3 no-progress crashes.
 - [x] 2026-06-10 · B8 · Kill switch checked pre-entry (worst-case projection incl. unmatched exposure), warns at 80%, single shared budget across headless runners (was per-runner).
 - [x] 2026-06-10 · B15 · CLOB rejection logs now include full response repr + token id.

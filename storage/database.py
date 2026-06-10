@@ -143,8 +143,14 @@ class Database:
         self._db_path = db_path or settings.DB_PATH
         self._db: Optional[aiosqlite.Connection] = None
         self._last_snapshot_time: float = 0
-        self._write_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        self._write_queue: asyncio.Queue = asyncio.Queue(
+            maxsize=settings.DB_WRITE_QUEUE_SIZE
+        )
         self._writer_task: Optional[asyncio.Task] = None
+        # Overflow accounting (B16): drops are counted and surfaced, not
+        # just logged once per write (which would spam a saturated queue).
+        self.dropped_writes: int = 0
+        self._last_drop_warning: float = 0.0
 
     async def initialize(self):
         """
@@ -195,7 +201,14 @@ class Database:
         if self._db:
             await self._db.commit()
             await self._db.close()
-            logger.info("Database closed")
+            if self.dropped_writes:
+                logger.warning(
+                    f"Database closed — {self.dropped_writes} writes were "
+                    f"dropped this session (queue overflow); analytics data "
+                    f"for those moments is incomplete"
+                )
+            else:
+                logger.info("Database closed")
 
     # ──────────────────────────────────────────────────────────
     # WRITE METHODS (non-blocking, queued)
@@ -412,6 +425,7 @@ class Database:
             row = await cursor.fetchone()
             stats[table] = row[0] if row else 0
 
+        stats["dropped_writes"] = self.dropped_writes
         return stats
 
     # ──────────────────────────────────────────────────────────
@@ -423,7 +437,14 @@ class Database:
         try:
             self._write_queue.put_nowait((sql, params))
         except asyncio.QueueFull:
-            logger.warning("Database write queue full — dropping write")
+            self.dropped_writes += 1
+            now = time.time()
+            if now - self._last_drop_warning >= settings.DB_DROP_WARN_INTERVAL_SECONDS:
+                self._last_drop_warning = now
+                logger.warning(
+                    f"Database write queue full — {self.dropped_writes} "
+                    f"writes dropped so far this session"
+                )
 
     async def _write_loop(self):
         """

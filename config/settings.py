@@ -195,3 +195,12 @@ MSG_CRASH_PROGRESS_MESSAGES: int = 10            # msgs that reset the streak
 
 # Kill switch: warn when projected loss reaches this fraction of the cap
 KILL_SWITCH_WARN_FRACTION: float = 0.8
+
+# Database write queue (B16): bounded so a stalled disk can't grow memory;
+# overflow drops are counted and warned at most once per interval.
+DB_WRITE_QUEUE_SIZE: int = 1000
+DB_DROP_WARN_INTERVAL_SECONDS: float = 60.0
+
+# Settlement under a stop request (B18): give resolution polling this long
+# after Ctrl+C before falling back to order-book price resolution.
+SETTLE_STOP_DEADLINE_SECONDS: float = 60.0

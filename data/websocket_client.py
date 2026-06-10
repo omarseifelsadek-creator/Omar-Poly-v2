@@ -27,6 +27,8 @@ from websockets.exceptions import (
     ConnectionClosed,
     ConnectionClosedError,
     ConnectionClosedOK,
+    InvalidHandshake,
+    InvalidStatus,
 )
 
 from config import settings
@@ -109,16 +111,36 @@ class WebSocketClient:
         logger.info(f"Starting WebSocket client for token {self.token_id[:20]}...")
 
         while self._running:
+            # Classify the failure (B9): a normal close or a flaky network
+            # is routine and gets the standard backoff; a handshake
+            # rejection (auth / geo-block / rate limit) will keep failing,
+            # so it logs loudly and jumps straight to the max delay.
+            slow_down = False
             try:
                 await self._connect_and_listen()
-            except Exception as e:
-                logger.error(f"WebSocket error: {e}")
+            except ConnectionClosedOK:
+                logger.info("WebSocket closed normally by server")
+            except ConnectionClosedError as e:
+                logger.warning(f"WebSocket closed abnormally: {e}")
+            except InvalidStatus as e:
+                slow_down = self._log_handshake_rejection(e)
+            except InvalidHandshake as e:
+                logger.error(f"WebSocket handshake failed: {e}")
+            except OSError as e:
+                # DNS failure, connection refused, network unreachable —
+                # transient by nature, normal backoff applies.
+                logger.warning(f"Network error (transient): {e}")
+            except Exception:
+                logger.exception("Unexpected WebSocket error")
 
             # If we get here, we disconnected
             if self._running:
                 self._connected = False
                 if self._on_disconnected:
                     await self._on_disconnected()
+
+                if slow_down:
+                    self._reconnect_delay = settings.WS_RECONNECT_MAX_DELAY
 
                 # Exponential backoff: wait longer each time we fail
                 logger.info(
@@ -131,6 +153,31 @@ class WebSocketClient:
                     self._reconnect_delay * 2,
                     settings.WS_RECONNECT_MAX_DELAY,
                 )
+
+    @staticmethod
+    def _log_handshake_rejection(exc: InvalidStatus) -> bool:
+        """
+        Log a handshake rejection with the right severity.
+
+        Returns True when the cause will not fix itself (auth/geo-block,
+        rate limiting) so the caller should jump straight to max backoff
+        instead of hammering the server.
+        """
+        status = getattr(exc.response, "status_code", None)
+        if status in (401, 403):
+            logger.error(
+                f"WebSocket handshake rejected (HTTP {status}) — likely "
+                f"auth or geo-block, NOT transient. Backing off to max; "
+                f"investigate before expecting reconnects to succeed."
+            )
+            return True
+        if status == 429:
+            logger.error(
+                "WebSocket rate-limited (HTTP 429) — backing off to max delay"
+            )
+            return True
+        logger.error(f"WebSocket handshake rejected (HTTP {status})")
+        return False
 
     async def stop(self):
         """Gracefully stop the WebSocket connection."""
@@ -194,5 +241,7 @@ class WebSocketClient:
                 if parsed is not None:
                     try:
                         await self._on_message(parsed)
-                    except Exception as e:
-                        logger.error(f"Error in message callback: {e}")
+                    except Exception:
+                        # Full traceback — a crashing callback is a bug in
+                        # our pipeline, not a connection problem.
+                        logger.exception("Error in message callback")

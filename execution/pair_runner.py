@@ -1105,6 +1105,13 @@ class PairRunner:
             return
 
         console.print("[yellow]  Resolving market...[/yellow]")
+        if self._stop_requested:
+            # B18: settlement is the one phase that can't be interrupted
+            # without losing the window's P&L — say so instead of looking hung.
+            console.print(
+                "[yellow]  (stop requested — settling this window first, "
+                "Ctrl+C again to force-quit without settling)[/yellow]"
+            )
 
         winner = None
 
@@ -1127,15 +1134,24 @@ class PairRunner:
             except Exception as e:
                 logger.warning(f"Binance resolution error: {e}")
 
-        # Method 3: Poll the Gamma API (last resort)
+        # Method 3: Poll the Gamma API (last resort). Under a stop request
+        # the poll is capped (B18) so graceful shutdown is bounded — the
+        # order-book fallback below still produces a settlement.
         if winner is None and self.window:
-            console.print("[yellow]  Price feeds unavailable, polling Gamma API...[/yellow]")
+            max_wait = (
+                settings.SETTLE_STOP_DEADLINE_SECONDS
+                if self._stop_requested else 90.0
+            )
+            console.print(
+                f"[yellow]  Price feeds unavailable, polling Gamma API "
+                f"(up to {max_wait:.0f}s)...[/yellow]"
+            )
             try:
                 winner = await fetch_market_resolution(
                     market_slug=self.window.event_slug,
                     up_token_id=self.yes_token_id,
                     down_token_id=self.no_token_id,
-                    max_wait=90.0,
+                    max_wait=max_wait,
                     poll_interval=5.0,
                 )
                 if winner:
