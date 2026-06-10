@@ -202,7 +202,6 @@ def replay_session(
             ob.apply_trade(trade_event)
             tracker.record_trade_at_level(
                 price=t["price"],
-                side=Side.BUY,
                 trade_size=t["size"],
                 trade_side=Side(t["side"]),
                 timestamp_ms=t["timestamp_ms"],

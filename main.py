@@ -185,9 +185,9 @@ class OBIApp:
         elif isinstance(msg, TradeEvent):
             self.orderbook.apply_trade(msg)
             # Record trade at the relevant price level for absorption detection
+            # (level side is derived from trade direction inside the tracker)
             self.level_tracker.record_trade_at_level(
                 price=msg.price,
-                side=Side.BUY,  # This is the book side the resting order was on
                 trade_size=msg.size,
                 trade_side=msg.side,
                 timestamp_ms=msg.timestamp_ms,
@@ -602,7 +602,37 @@ Examples:
         "--max-loss", type=float, default=None,
         help="Kill switch: stop trading after losing this many dollars (e.g. --max-loss 50)",
     )
+    parser.add_argument(
+        "--yes", action="store_true",
+        help="Skip the live-mode confirmation prompt (for scripted runs)",
+    )
     return parser.parse_args()
+
+
+def confirm_live_mode(args) -> bool:
+    """
+    Gate real-money trading behind an explicit typed confirmation.
+
+    Returns True if it is safe to proceed. Scripted/non-interactive runs
+    must pass --yes; an interactive run must type 'yes' exactly.
+    """
+    if args.mode != "live" or args.yes:
+        return True
+
+    console.print("\n[bold red]═══ LIVE MODE — REAL MONEY ═══[/bold red]")
+    console.print(f"  Asset/timeframe: {(args.asset or 'btc').upper()}/{args.timeframe or '5m'}")
+    console.print(f"  Kill switch:     {'$' + str(args.max_loss) if args.max_loss else '[bold red]NONE SET[/bold red] (consider --max-loss)'}")
+    console.print("  Orders are FOK against the Polymarket CLOB and cannot be recalled.\n")
+
+    if not sys.stdin.isatty():
+        console.print("[red]Non-interactive session: pass --yes to confirm live mode.[/red]")
+        return False
+
+    answer = input("Type 'yes' to start live trading: ").strip().lower()
+    if answer != "yes":
+        console.print("[yellow]Live mode not confirmed — exiting.[/yellow]")
+        return False
+    return True
 
 
 # ──────────────────────────────────────────────────────────────
@@ -938,6 +968,10 @@ async def main():
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    # Real-money gate — covers every mode before any runner is constructed
+    if not confirm_live_mode(args):
+        return
 
     # BTC 5-minute auto-rotating mode
     if args.btc5m:

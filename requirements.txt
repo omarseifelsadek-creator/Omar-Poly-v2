@@ -29,3 +29,9 @@ python-dotenv>=1.0.0
 streamlit>=1.30.0
 plotly>=5.18.0
 pandas>=2.1.0
+
+# ── Live / dry-run trading (Polymarket CLOB order signing + placement) ──
+py-clob-client>=0.34.6
+
+# ── Excel session reports (generate_pair_report.py) ──
+openpyxl>=3.1.5

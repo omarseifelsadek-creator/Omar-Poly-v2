@@ -226,7 +226,7 @@ class LevelTracker:
     Usage:
         tracker = LevelTracker()
         tracker.record_change(price=0.52, side=Side.BUY, new_size=5000, timestamp_ms=...)
-        tracker.record_trade_at_level(price=0.52, side=Side.BUY, trade=...)
+        tracker.record_trade_at_level(price=0.52, trade_size=500, trade_side=Side.BUY, timestamp_ms=...)
 
         oscillations = tracker.get_level(0.52, Side.BUY).count_oscillations(60, 500)
     """
@@ -263,7 +263,6 @@ class LevelTracker:
     def record_trade_at_level(
         self,
         price: float,
-        side: Side,
         trade_size: float,
         trade_side: Side,
         timestamp_ms: int,
@@ -271,7 +270,8 @@ class LevelTracker:
         """
         Record a trade that occurred near a price level.
 
-        We match trades to the OPPOSITE side's level:
+        The level side is derived from the trade direction — trades match
+        the OPPOSITE side's resting order:
         - A BUY trade (taker lifts ask) → record on the ASK level
         - A SELL trade (taker hits bid) → record on the BID level
 

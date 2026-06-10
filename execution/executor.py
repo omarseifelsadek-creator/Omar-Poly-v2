@@ -175,34 +175,47 @@ class LiveExecutor(BaseExecutor):
     """
 
     def __init__(self):
-        load_dotenv("env")
+        # Load .env from the project root (was load_dotenv("env"), which
+        # pointed at the virtualenv directory and silently loaded nothing).
+        load_dotenv()
+        # Validate eagerly so a missing credential fails at startup,
+        # not at the first order attempt mid-window.
+        self._creds = self._read_and_validate_creds()
         self._client: Optional[ClobClient] = None
 
     # ── Client init ──────────────────────────────────────────────────
 
+    @staticmethod
+    def _read_and_validate_creds() -> dict[str, str]:
+        """Read all five POLY_* vars; raise naming every missing one."""
+        creds = {
+            name: os.environ.get(name, "").strip()
+            for name in (
+                "POLY_PRIVATE_KEY",
+                "POLY_API_KEY",
+                "POLY_API_SECRET",
+                "POLY_API_PASSPHRASE",
+                "POLY_FUNDER",
+            )
+        }
+        missing = [name for name, val in creds.items() if not val]
+        if missing:
+            raise RuntimeError(
+                f"[LiveExecutor] Missing .env vars: {missing} — "
+                f"create .env from .env.example (see docs/RUNBOOK.md §2)"
+            )
+        return creds
+
     def _ensure_client(self) -> None:
-        """Lazy-init the ClobClient once."""
+        """Lazy-init the ClobClient once (credentials validated at __init__)."""
         if self._client is not None:
             return
 
-        key = os.environ.get("POLY_PRIVATE_KEY", "").strip()
-        api_key = os.environ.get("POLY_API_KEY", "").strip()
-        api_secret = os.environ.get("POLY_API_SECRET", "").strip()
-        api_passphrase = os.environ.get("POLY_API_PASSPHRASE", "").strip()
-        funder = os.environ.get("POLY_FUNDER", "").strip()
-
-        missing = [
-            name for name, val in [
-                ("POLY_PRIVATE_KEY", key),
-                ("POLY_API_KEY", api_key),
-                ("POLY_API_SECRET", api_secret),
-                ("POLY_API_PASSPHRASE", api_passphrase),
-                ("POLY_FUNDER", funder),
-            ]
-            if not val
-        ]
-        if missing:
-            raise RuntimeError(f"[LiveExecutor] Missing .env vars: {missing}")
+        key = self._creds["POLY_PRIVATE_KEY"]
+        api_key = self._creds["POLY_API_KEY"]
+        api_secret = self._creds["POLY_API_SECRET"]
+        api_passphrase = self._creds["POLY_API_PASSPHRASE"]
+        funder = self._creds["POLY_FUNDER"]
 
         self._client = ClobClient(
             host=CLOB_HOST,
