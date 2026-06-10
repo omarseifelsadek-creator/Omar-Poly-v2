@@ -137,7 +137,7 @@ Central data structure flowing through the entire pipeline (`analytics/metrics.p
 |-------------------------|--------------------------------------------------------------|
 | New detection pattern   | `analytics/detectors.py` -> add to `data/models.py` -> wire in `analytics/metrics.py` -> interpret in `analytics/interpreter.py` -> signal in `analytics/signals.py` |
 | New metric              | `data/models.py` (add field) -> `analytics/metrics.py` (compute) -> `ui/terminal.py` (display) |
-| Strategy behavior       | `config/strategy.conf` (hot) or `execution/strategy.py` (code) |
+| Strategy behavior       | Pairs: `config/strategy.conf` `[pairs]` (per-window reload). Dashboard: other conf sections or `execution/strategy.py` |
 | New CLI mode            | `parse_args()` in `main.py` + new `async run_*()` function  |
 | Tune sensitivity        | `config/settings.py` (thresholds section)                    |
 | New asset for pairs     | `execution/pair_runner.py` (add slug pattern)                |
@@ -145,9 +145,11 @@ Central data structure flowing through the entire pipeline (`analytics/metrics.p
 ## Critical Warnings
 
 - **NEVER** use `--mode live` without paper testing first
-- **strategy.conf is largely IGNORED in `--pairs` mode** — it configures the intelligence dashboard
-  (`StrategyEngine`); pair-trading params are hardcoded in `execution/pair_runner.py` (`PairConfig`).
-  Tuning the conf and expecting pairs behavior to change is a trap (backlog B12).
+- **Pairs params live in the `[pairs]` section of `config/strategy.conf`** (B12). They are re-read
+  at every WINDOW ROTATION — a conf edit applies at the next window, never mid-window — and each
+  window's active set is stamped to `data/logs/pair_params_*.csv`. Timing params (panic/theta/sniper
+  windows) are NOT in the conf; they derive from the timeframe via `execution/market_spec.py`.
+  The other conf sections ([strategy]/[sizing]/[risk]) configure only the intelligence dashboard.
 - **Polymarket fee curve**: `price * (1 - price) * 0.0625` (~3.12% round-trip at 50c)
 - **WebSocket reconnection** uses exponential backoff — don't add aggressive retries
 - **Signal/insight dedup** is module-level state: persists within session, resets on restart

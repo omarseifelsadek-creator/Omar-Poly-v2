@@ -17,6 +17,79 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH = "config/strategy.conf"
 
+# [pairs] section fallbacks = the v15 baseline (EXP-002). A missing
+# section, missing key, or unparseable value falls back to these, so an
+# absent/broken conf can never silently change trading behavior.
+PAIRS_PARAM_DEFAULTS: dict = {
+    "target_pair_cost": 0.96,
+    "max_pair_cost": 0.96,
+    "panic_pair_cost": 1.02,
+    "panic_hedge_pair_limit": 0.97,
+    "atomic_entry_max_pair": 0.99,
+    "buy_size_usd": 10.0,
+    "max_position_usd": 100.0,
+    "panic_max_position_usd": 116.0,
+    "max_unmatched_usd": 30.0,
+    "max_skew_pct": 0.30,
+    "sniper_threshold": 0.35,
+    "value_zone_high": 0.43,
+    "min_first_leg_price": 0.15,
+    "obi_delay_threshold": 0.85,
+    "flow_delay_threshold": 0.75,
+    "min_buy_cooldown_s": 2.0,
+    "max_book_walk_levels": 3,
+}
+
+
+def load_pairs_params(path: str = None) -> dict:
+    """
+    Fresh parse of strategy.conf's [pairs] section (B12).
+
+    Called once per window rotation by PairRunner — params are frozen
+    for the duration of a window so each window's data reflects exactly
+    one param set. Per-key fallback: one bad value doesn't discard the
+    rest of the section.
+
+    Returns a dict of PairConfig kwargs (timing params excluded — those
+    derive from MarketSpec per timeframe).
+    """
+    path = path or CONFIG_PATH
+    params = dict(PAIRS_PARAM_DEFAULTS)
+
+    if not os.path.exists(path):
+        logger.warning(f"[pairs] config not found at {path} — using v15 defaults")
+        return params
+
+    cp = configparser.ConfigParser()
+    try:
+        cp.read(path)
+    except configparser.Error as e:
+        logger.error(f"[pairs] config unreadable ({e}) — using v15 defaults")
+        return params
+
+    if not cp.has_section("pairs"):
+        return params
+
+    # A typo'd key would silently do nothing and ruin an experiment's
+    # interpretation — call it out loudly.
+    for key in cp.options("pairs"):
+        if key not in PAIRS_PARAM_DEFAULTS:
+            logger.warning(
+                f"[pairs] unknown key '{key}' in {path} — typo? It has NO effect."
+            )
+
+    for key, default in PAIRS_PARAM_DEFAULTS.items():
+        try:
+            if isinstance(default, int) and not isinstance(default, bool):
+                params[key] = cp.getint("pairs", key, fallback=default)
+            else:
+                params[key] = cp.getfloat("pairs", key, fallback=default)
+        except (ValueError, TypeError):
+            logger.error(
+                f"[pairs] bad value for '{key}' — keeping default {default}"
+            )
+    return params
+
 
 class LiveConfig:
     """

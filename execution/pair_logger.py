@@ -274,3 +274,33 @@ def log_pair_filter(market: str, reason: str, value: float, threshold: float,
         spread_bps,
         tick_distance,
     ], FILTER_HEADER)
+
+
+# ──────────────────────────────────────────────────────────
+# PARAMS LOG — Active PairConfig per window (B12)
+# ──────────────────────────────────────────────────────────
+# One row per window at rotation time. Joins to pair_windows_*.csv on
+# (market) — the market label embeds the window time. This is a SIDECAR
+# file so the pair_windows schema (and older dated files) stay stable.
+
+PARAMS_ORDER = [
+    "target_pair_cost", "max_pair_cost", "panic_pair_cost",
+    "panic_hedge_pair_limit", "atomic_entry_max_pair",
+    "buy_size_usd", "max_position_usd", "panic_max_position_usd",
+    "max_unmatched_usd", "max_skew_pct",
+    "sniper_threshold", "value_zone_high", "min_first_leg_price",
+    "obi_delay_threshold", "flow_delay_threshold",
+    "min_buy_cooldown_s", "max_book_walk_levels",
+]
+
+PARAMS_HEADER = ["timestamp", "market", "mode"] + PARAMS_ORDER
+
+
+def log_pair_params(market: str, mode: str, params: dict):
+    """Stamp the active param set for the window that is about to run."""
+    filename = f"pair_params_{_date_str()}.csv"
+    _append_row(filename, [
+        _time_str(),
+        market,
+        mode.upper(),
+    ] + [params.get(k, "") for k in PARAMS_ORDER], PARAMS_HEADER)

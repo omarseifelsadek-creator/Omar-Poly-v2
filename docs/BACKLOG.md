@@ -9,7 +9,7 @@
 
 ## Next (P1)
 
-- [ ] B12 · Make a `[pairs]` config section actually drive pairs mode — params hardcoded in `pair_runner.py` (audit S3). Pull forward before any param-tuning experiments.
+- (empty — next work comes from EXP-002 results)
 
 ## Later (P2 — structural)
 
@@ -23,6 +23,7 @@
 
 ## Done
 
+- [x] 2026-06-10 · B12 · `[pairs]` section in strategy.conf drives PairConfig: per-window reload (never mid-window), active set stamped to `pair_params_*.csv` sidecar, v15 fallbacks, typo'd-key warnings. Experiments = edit conf, no code changes.
 - [x] 2026-06-10 · B13 · main.py 1144→325 lines (modes/ package: intelligence, select, btc5m); pair_runner 1393→~1230 (ChainlinkTracker → chainlink_feed.py, resolution chain → window_settler.py). Residual tracked above.
 - [x] 2026-06-10 · B14 · 46 analytics characterization tests (metrics/detectors/momentum/CVD) + hermetic conftest (suite can't touch data/logs). 74 tests total.
 - [x] 2026-06-10 · B9 · WebSocket failures classified: 401/403/429 handshake rejections log loudly + jump to max backoff; closes/network errors keep normal backoff; callback errors get tracebacks.

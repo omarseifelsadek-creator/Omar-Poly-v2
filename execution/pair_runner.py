@@ -22,6 +22,7 @@ from websockets.exceptions import ConnectionClosed
 from rich.console import Console
 
 from config import settings
+from config.live_config import load_pairs_params
 from data.message_parser import parse_messages
 from data.models import BookSnapshot, PriceChangeEvent, TradeEvent
 from state.orderbook import OrderBook
@@ -29,7 +30,7 @@ from analytics.metrics import compute_all_metrics
 from analytics.detectors import LevelTracker
 from analytics.momentum import MomentumEngine
 from execution.pair_strategy import PairTradingEngine, PairConfig, WindowResult, polymarket_taker_fee
-from execution.pair_logger import log_pair_buy, log_window_settlement, log_pair_rejection, log_pair_filter
+from execution.pair_logger import log_pair_buy, log_window_settlement, log_pair_rejection, log_pair_filter, log_pair_params
 from execution.chainlink_feed import ChainlinkTracker
 from execution.executor import make_executor, BaseExecutor
 from execution.kill_switch import KillSwitch
@@ -75,20 +76,13 @@ class PairRunner:
         self.yes_momentum = MomentumEngine()
         self.no_momentum = MomentumEngine()
 
-        # The pair trading engine — timing params from MarketSpec + edge refinements
-        config = PairConfig(
-            panic_time_seconds=self.spec.panic_time_seconds,
-            theta_full_size_until_s=self.spec.theta_full_size_until_s,
-            theta_half_size_until_s=self.spec.theta_half_size_until_s,
-            sniper_signal_min_time=self.spec.sniper_signal_min_time,
-            # ── Edge refinements (v15) ──
-            max_skew_pct=0.30,              # was 0.50 — tighter imbalance lock
-            max_pair_cost=0.96,             # was 0.99 — only cheap pairs
-            atomic_entry_max_pair=0.99,     # was 1.05 — stricter first-leg gate
-            obi_delay_threshold=0.85,       # was 0.75 — allow more early fills
-            flow_delay_threshold=0.75,      # was 0.60 — allow more early fills
+        # The pair trading engine — timing params from MarketSpec, tunables
+        # from strategy.conf [pairs] (B12; v15 values are the fallbacks)
+        self._active_params: dict = {}
+        self.engine = PairTradingEngine(
+            self._build_pair_config(),
+            window_duration=float(self.spec.interval_seconds),
         )
-        self.engine = PairTradingEngine(config, window_duration=float(self.spec.interval_seconds))
 
         # Order executor — paper (no-op) or live (real CLOB orders)
         self.executor: BaseExecutor = make_executor(mode)
@@ -149,6 +143,30 @@ class PairRunner:
 
         # Graceful stop: set by Ctrl+C, checked after window settlement
         self._stop_requested: bool = False
+
+    def _build_pair_config(self) -> PairConfig:
+        """
+        PairConfig = timeframe-derived timing (MarketSpec) + tunables from
+        strategy.conf [pairs] (B12). Re-read at every window rotation so a
+        conf edit applies cleanly at the next window — never mid-window.
+        """
+        self._active_params = load_pairs_params()
+        return PairConfig(
+            panic_time_seconds=self.spec.panic_time_seconds,
+            theta_full_size_until_s=self.spec.theta_full_size_until_s,
+            theta_half_size_until_s=self.spec.theta_half_size_until_s,
+            sniper_signal_min_time=self.spec.sniper_signal_min_time,
+            **self._active_params,
+        )
+
+    def _apply_pairs_config(self, market_label: str):
+        """Refresh engine config from the conf and stamp it for this window."""
+        new_config = self._build_pair_config()
+        if new_config != self.engine.config:
+            console.print("[cyan]  [pairs] config changed — applying for this window[/cyan]")
+            logger.info(f"[pairs] new params: {self._active_params}")
+        self.engine.config = new_config
+        log_pair_params(market_label, self.mode, self._active_params)
 
     def request_stop(self):
         """Signal this runner to stop after the current window."""
@@ -213,8 +231,12 @@ class PairRunner:
             console.print(f"[dim]NO (Down): {self.no_token_id[:30]}...[/dim]")
             console.print(f"[green]{'='*60}[/green]\n")
 
-            # Reset engine for new window
+            # Reset engine for new window + apply current [pairs] config
+            # (B12: conf re-read per rotation; param set stamped to CSV)
             self.engine.reset()
+            self._apply_pairs_config(
+                f"{self.spec.display_name_long} — {window.time_label}"
+            )
             self.engine.window_start = time.time()
             self.engine.window_duration = window.seconds_remaining
             self.yes_book = OrderBook()

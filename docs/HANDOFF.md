@@ -18,14 +18,14 @@ All planned phases done (audit → criticals → live-safety → resilience → 
 
 ## Next Steps (in order)
 
-1. **Close EXP-002**: stats from `pair_windows_20260610/11.csv` — EXCLUDE windows settled before 18:25 Jun 10 (discarded Claude run); in `pair_buys_*`, synthetic test rows have market label `BTC 5m` (no window-time suffix) — exclude those too. Write STRATEGY_LOG Part 2 entry with per-TF net_pnl/window, pairs/window, rejection_rate, variance + verdict.
-2. B12: `[pairs]` section in strategy.conf → PairConfig (hot-reload per window; stamp active params into pair_windows CSV rows).
-3. New-strategy ideation off the baseline data → BACKLOG Ideas → EXP-003+.
+1. **Close EXP-002**: stats from `pair_windows_20260610/11.csv` — EXCLUDE windows settled before 18:25 Jun 10 (discarded Claude run); in `pair_buys_*`, synthetic test rows have market label `BTC 5m` (no window-time suffix) — exclude those too. Write STRATEGY_LOG Part 2 entry with per-TF net_pnl/window, pairs/window, rejection_rate, variance + verdict. (Early peek at 12 windows: +$10.37/window avg, range −$18→+$58.)
+2. EXP-003+: param experiments are now a conf edit (B12 done) — edit `[pairs]` in strategy.conf, restart runner, new params apply per window and stamp to `pair_params_*.csv`.
+3. New-strategy ideation off the baseline data → BACKLOG Ideas.
 4. B19 decision (dead `--token` path) and B17 (obi_velocity) when convenient.
 
 ## Watch Out
 
-- strategy.conf still ignored in `--pairs` mode until B12 (params: `pair_runner.py` PairConfig block + `pair_strategy.py:149`).
+- **Omar's EXP-002 terminal process predates B12** — it runs the OLD code (conf still ignored for it). Conf edits affect only runners started after tonight. Don't edit `[pairs]` values until EXP-002 closes anyway (baseline purity).
 - After any "AMBIGUOUS LIVE ORDER" banner: verify positions on polymarket.com; kill-switch cap approximate until then (RUNBOOK §3).
 - Don't run paper smokes or fill-producing tests outside pytest while EXP-002 runs — conftest redirects test CSVs, but ad-hoc `main.py --pairs` runs write into the same dated CSVs.
 
