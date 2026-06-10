@@ -59,10 +59,23 @@ class TradeSignal:
 _last_signals: dict[str, tuple[float, str]] = {}
 _SIGNAL_COOLDOWN = 45.0  # Seconds between same signal type
 
+# Keys include price levels — bound the dict so long sessions don't leak.
+# Entries past the cooldown can't suppress anything, so pruning is safe.
+_MAX_DEDUP_KEYS = 500
+
+
+def _prune_expired(now: float) -> None:
+    """Drop entries past the cooldown window once the dict grows large."""
+    if len(_last_signals) <= _MAX_DEDUP_KEYS:
+        return
+    for key in [k for k, (ts, _) in _last_signals.items() if now - ts >= _SIGNAL_COOLDOWN]:
+        del _last_signals[key]
+
 
 def _should_emit_signal(key: str, value_hash: str = "") -> bool:
     """Dedup check for signals — same logic as insights."""
     now = time.time()
+    _prune_expired(now)
     if key not in _last_signals:
         _last_signals[key] = (now, value_hash)
         return True

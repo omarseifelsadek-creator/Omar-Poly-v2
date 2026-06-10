@@ -41,6 +41,20 @@ _COOLDOWNS = {
     "alert": 15.0,
 }
 
+# Keys include price levels, so churning markets mint new keys forever.
+# Entries older than the longest cooldown can never suppress an emission,
+# so pruning them is behavior-preserving. Cap keeps long sessions bounded.
+_MAX_DEDUP_KEYS = 500
+
+
+def _prune_expired(now: float) -> None:
+    """Drop entries past every cooldown window once the dict grows large."""
+    if len(_last_emitted) <= _MAX_DEDUP_KEYS:
+        return
+    max_cooldown = max(_COOLDOWNS.values())
+    for key in [k for k, (ts, _) in _last_emitted.items() if now - ts >= max_cooldown]:
+        del _last_emitted[key]
+
 
 def _should_emit(key: str, severity: str, value_hash: str = "") -> bool:
     """
@@ -53,6 +67,7 @@ def _should_emit(key: str, severity: str, value_hash: str = "") -> bool:
     """
     now = time.time()
     cooldown = _COOLDOWNS.get(severity, 30.0)
+    _prune_expired(now)
 
     if key not in _last_emitted:
         _last_emitted[key] = (now, value_hash)
