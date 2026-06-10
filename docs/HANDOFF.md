@@ -20,8 +20,7 @@ Everything done: audit → criticals → live-safety → resilience → tests �
 
 1. **Close EXP-002**: stats from `pair_windows_20260610/11.csv` — EXCLUDE windows settled before 18:25 Jun 10 (discarded Claude run); in `pair_buys_*`, synthetic test rows have market label `BTC 5m` (no window-time suffix) — exclude those too. Write STRATEGY_LOG Part 2 entry with per-TF net_pnl/window, pairs/window, rejection_rate, variance + verdict. (Early peek at 12 windows: +$10.37/window avg, range −$18→+$58.)
 2. EXP-003+: param experiments are now a conf edit (B12 done) — edit `[pairs]` in strategy.conf, restart runner, new params apply per window and stamp to `pair_params_*.csv`.
-3. New-strategy ideation off the baseline data → BACKLOG Ideas.
-4. B19 decision (dead `--token` path) and B17 (obi_velocity) when convenient.
+3. New-strategy ideation off the baseline data → BACKLOG Ideas. (`obi_velocity_5s/30s` is a ready, unconsumed ingredient — B17.)
 
 ## Watch Out
 
