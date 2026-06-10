@@ -32,6 +32,8 @@ def _snapshot(asset_id: str, bid: float, ask: float, size: float = 1000.0) -> Bo
 
 
 def test_fill_bookkeeping_runs_on_successful_paper_buy(tmp_path, monkeypatch):
+    import execution.pair_logger as pair_logger
+
     runner = PairRunner(mode="paper", spec=make_market_spec("btc", "5m"))
     runner.engine.reset()  # fresh 300s window, full theta sizing
 
@@ -49,7 +51,8 @@ def test_fill_bookkeeping_runs_on_successful_paper_buy(tmp_path, monkeypatch):
     runner.engine._yes_ask_since = time.time() - 2.0
     runner.engine._no_ask_since = time.time() - 2.0
 
-    buys_csv = Path("data/logs") / f"pair_buys_{datetime.now():%Y%m%d}.csv"
+    # conftest redirects LOG_DIR to a temp dir — never data/logs/
+    buys_csv = Path(pair_logger.LOG_DIR) / f"pair_buys_{datetime.now():%Y%m%d}.csv"
     rows_before = len(buys_csv.read_text().splitlines()) if buys_csv.exists() else 0
 
     asyncio.run(runner._try_evaluate())
