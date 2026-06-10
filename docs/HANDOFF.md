@@ -3,33 +3,32 @@
 > Claude: read this FIRST each session. Overwrite (don't append) at session end or after any
 > major milestone. Keep under 60 lines — git history is the archive.
 
-**Updated:** 2026-06-10 (evening) · **Branch:** main (pushed through Phase 1; Phase 2 commit pending push) · **Last mode run:** paper smoke
+**Updated:** 2026-06-10 (night) · **Branch:** main · **EXP-002 paper run LIVE in Omar's terminal**
 
 ## Current Focus
 
-Phases 1+2 of the B-fix plan landed (live safety + resilience). Remaining: EXP-002 baseline, B12 (config-driven pairs), then Phase 3 (B14 analytics tests) → Phase 4 (B13 file splits).
+All planned phases done (audit → criticals → live-safety → resilience → tests → splits). EXP-002 baseline accumulating overnight. Next session: close EXP-002, then B12.
 
 ## State of the World
 
-- **Live-safe**: ambiguous-fill reconciliation w/ 10s query timeout + prior-fill guard; pre-entry kill switch w/ shared session budget + unverified-risk accounting; crash-loop escalation; WS auth/geo-block failures distinguished from transient drops (B9); DB drops counted (B16); bounded graceful stop (B18).
-- 28 tests green (`env/bin/python -m pytest tests/`). Python-reviewer pass done on Phase 1; its 3 findings fixed.
-- **Still no pairs baseline** — EXP-002 (multi-hour headless paper run) is the gate before any tuning or new-strategy comparisons.
-- strategy.conf still ignored in `--pairs` mode until B12 (params at `pair_runner.py:164`, `pair_strategy.py:149`).
+- **EXP-002 running in Omar's own terminal** (foreground, started ~18:25 Jun 10, btc 5m+15m paper, caffeinate). Morning: Omar Ctrl+C once → settle → say "close EXP-002".
+- Suite: **74 tests green** (`env/bin/python -m pytest tests/`). Pyflakes clean of real issues.
+- Structure: main.py is a 325-line dispatcher → `modes/` (intelligence/select/btc5m); pair_runner ~1230 with `chainlink_feed.py` + `window_settler.py` extracted.
+- 18 backlog items done today (B1-B11, B13-B16, B18 + criticals). Open: B12, B17, B19, B13-residual.
 
 ## Next Steps (in order)
 
-1. EXP-002 **is running in Omar's own terminal** (foreground, started ~2026-06-10 18:25; btc 5m+15m paper). Morning: Omar presses Ctrl+C once, waits for settle. Then compute baseline stats from `pair_windows_20260610/11.csv` → close the entry in STRATEGY_LOG Part 2. NOTE: exclude windows settled before 18:25 on Jun 10 — those are from a discarded 10-min Claude-launched run.
-2. B12: `[pairs]` section in strategy.conf → PairConfig (hot-reload like the existing LiveConfig pattern).
-3. Phase 3: analytics test suite (metrics/detectors/momentum/cvd pure functions).
-4. Phase 4: split main.py → modes/, extract WindowSettler + SessionStats from pair_runner.
-5. New-strategy ideation → BACKLOG Ideas → STRATEGY_LOG experiments.
+1. **Close EXP-002**: stats from `pair_windows_20260610/11.csv` — EXCLUDE windows settled before 18:25 Jun 10 (discarded Claude run); in `pair_buys_*`, synthetic test rows have market label `BTC 5m` (no window-time suffix) — exclude those too. Write STRATEGY_LOG Part 2 entry with per-TF net_pnl/window, pairs/window, rejection_rate, variance + verdict.
+2. B12: `[pairs]` section in strategy.conf → PairConfig (hot-reload per window; stamp active params into pair_windows CSV rows).
+3. New-strategy ideation off the baseline data → BACKLOG Ideas → EXP-003+.
+4. B19 decision (dead `--token` path) and B17 (obi_velocity) when convenient.
 
 ## Watch Out
 
-- After an "AMBIGUOUS LIVE ORDER" banner: kill-switch cap is approximate until positions verified on polymarket.com (cost counted as lost; RUNBOOK §3).
-- Two separate `--pairs` terminals don't share the loss budget — use `--headless` for multi-timeframe.
-- Live P&L correctness depends on `_live_fills` — only populated since the B1 fix (Jun 10).
+- strategy.conf still ignored in `--pairs` mode until B12 (params: `pair_runner.py` PairConfig block + `pair_strategy.py:149`).
+- After any "AMBIGUOUS LIVE ORDER" banner: verify positions on polymarket.com; kill-switch cap approximate until then (RUNBOOK §3).
+- Don't run paper smokes or fill-producing tests outside pytest while EXP-002 runs — conftest redirects test CSVs, but ad-hoc `main.py --pairs` runs write into the same dated CSVs.
 
 ## Open Questions (for Omar)
 
-- (none — EXP-002 in flight; keep the MacBook plugged in overnight)
+- (none — sleep optional, the bot doesn't need supervision)

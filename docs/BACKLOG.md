@@ -13,9 +13,9 @@
 
 ## Later (P2 — structural)
 
-- [ ] B13 · Split `main.py` (1100+ lines / 6 modes) and `pair_runner.py` (1300+ lines) (audit S1/S2). Do after B14 grows the test net.
-- [ ] B14 · Grow tests: analytics pure functions (`metrics.py`, `detectors.py`, `momentum.py`, `cvd.py`) (audit S7). Started — 19 tests exist (fill logging, kill switch, executor reconcile, runner safety).
+- [ ] B13-residual · `pair_runner.py` still ~1230 lines after extracting ChainlinkTracker + resolution chain — further decomposition (session stats/reporting) best done alongside B12.
 - [ ] B17 · `obi_velocity_5s/30s`: wire into signals or remove (audit S5).
+- [ ] B19 · `--token` CLI arg is parsed but never consumed (silently falls through to the synthetic engine); `select_market_interactive`/`_display_and_pick_market` are dead code; OBIApp is only reachable via `--btc5m`. Decide: rewire the direct-token intelligence path or remove the arg + dead selectors (now in `modes/select.py`). CLAUDE.md/README document `--token` as working.
 
 ## Ideas (unprioritized parking lot — new-strategy candidates graduate to STRATEGY_LOG)
 
@@ -23,6 +23,8 @@
 
 ## Done
 
+- [x] 2026-06-10 · B13 · main.py 1144→325 lines (modes/ package: intelligence, select, btc5m); pair_runner 1393→~1230 (ChainlinkTracker → chainlink_feed.py, resolution chain → window_settler.py). Residual tracked above.
+- [x] 2026-06-10 · B14 · 46 analytics characterization tests (metrics/detectors/momentum/CVD) + hermetic conftest (suite can't touch data/logs). 74 tests total.
 - [x] 2026-06-10 · B9 · WebSocket failures classified: 401/403/429 handshake rejections log loudly + jump to max backoff; closes/network errors keep normal backoff; callback errors get tracebacks.
 - [x] 2026-06-10 · B16 · DB queue overflow: dropped-write counter, warning throttled to 1/min, total surfaced in get_stats + close summary.
 - [x] 2026-06-10 · B18 · Settlement under Ctrl+C prints "settling… Ctrl+C again to force" and caps Gamma polling at 60s (book fallback still settles).
