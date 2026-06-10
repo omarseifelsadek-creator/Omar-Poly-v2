@@ -18,7 +18,7 @@ Phases 1+2 of the B-fix plan landed (live safety + resilience). Remaining: EXP-0
 
 ## Next Steps (in order)
 
-1. EXP-002: overnight `--headless` paper run (btc 5m+15m), write STRATEGY_LOG entry from `pair_windows_*.csv`.
+1. EXP-002 **is running** (started 2026-06-10 18:22, pid in `/tmp/exp002.pid`, log: `data/logs/exp002_run.log`). Morning: `kill -INT $(cat /tmp/exp002.pid)`, wait for settle, then compute baseline stats from `pair_windows_20260610/11.csv` → close the entry in STRATEGY_LOG Part 2.
 2. B12: `[pairs]` section in strategy.conf → PairConfig (hot-reload like the existing LiveConfig pattern).
 3. Phase 3: analytics test suite (metrics/detectors/momentum/cvd pure functions).
 4. Phase 4: split main.py → modes/, extract WindowSettler + SessionStats from pair_runner.
@@ -32,4 +32,4 @@ Phases 1+2 of the B-fix plan landed (live safety + resilience). Remaining: EXP-0
 
 ## Open Questions (for Omar)
 
-- Kick off EXP-002 tonight?
+- (none — EXP-002 in flight; keep the MacBook plugged in overnight)
