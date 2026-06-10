@@ -1011,10 +1011,17 @@ async def main():
         console.print(f"  Logging to: data/logs/")
         console.print(f"  [dim]Press Ctrl+C to stop all runners[/dim]\n")
 
+        # One shared budget: --max-loss caps the SESSION, not each runner (B8)
+        from execution.kill_switch import KillSwitch
+        shared_switch = KillSwitch(args.max_loss)
+
         runners = []
         for tf in timeframes:
             spec = make_market_spec(asset, tf)
-            runner = PairRunner(mode=mode, spec=spec, headless=True, max_loss=args.max_loss)
+            runner = PairRunner(
+                mode=mode, spec=spec, headless=True,
+                max_loss=args.max_loss, kill_switch=shared_switch,
+            )
             runners.append(runner)
             console.print(f"  [#00FF41]●[/#00FF41] {asset.upper()}/{tf} runner created")
 

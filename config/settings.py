@@ -175,3 +175,22 @@ UI_REFRESH_RATE: float = 0.5
 UI_MAX_INSIGHTS: int = 15
 # Maximum number of trades to show in the tape
 UI_MAX_TRADES: int = 10
+
+# ──────────────────────────────────────────────────────────────
+# LIVE EXECUTION SAFETY (B7/B8)
+# ──────────────────────────────────────────────────────────────
+# Ambiguous-order reconciliation: when a live FOK submission errors or
+# returns an unparseable response, the order may still have matched.
+# We poll our own trade history this many times before declaring it
+# unfilled and halting the window.
+LIVE_RECONCILE_ATTEMPTS: int = 3
+LIVE_RECONCILE_DELAY_SECONDS: float = 1.5
+LIVE_RECONCILE_QTY_TOLERANCE: float = 0.05       # ±5% size match
+
+# Message-loop crash escalation: end the window instead of reconnect-
+# spinning after this many consecutive crashes with no progress.
+MSG_CRASH_STREAK_LIMIT: int = 3
+MSG_CRASH_PROGRESS_MESSAGES: int = 10            # msgs that reset the streak
+
+# Kill switch: warn when projected loss reaches this fraction of the cap
+KILL_SWITCH_WARN_FRACTION: float = 0.8

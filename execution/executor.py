@@ -56,19 +56,32 @@ pair_strategy.py is never touched.
 import os
 import asyncio
 import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
 from dotenv import load_dotenv
 
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import ApiCreds, OrderArgs, OrderType, PartialCreateOrderOptions
+from py_clob_client.clob_types import (
+    ApiCreds,
+    OrderArgs,
+    OrderType,
+    PartialCreateOrderOptions,
+    TradeParams,
+)
 from py_clob_client.constants import POLYGON
 from py_clob_client.order_builder.constants import BUY
+
+from config import settings
 
 logger = logging.getLogger(__name__)
 
 CLOB_HOST = "https://clob.polymarket.com"
+
+# CLOB response statuses that are an explicit relayer answer — the order
+# definitively did NOT fill, so no reconciliation is needed.
+CLEAN_REJECTION_STATUSES = ("unmatched", "cancelled", "canceled", "error")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -350,6 +363,7 @@ class LiveExecutor(BaseExecutor):
             f"@ ${vwap_price:.4f} | token={token_id[:16]}..."
         )
 
+        submitted_at = time.time()
         try:
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
@@ -357,17 +371,23 @@ class LiveExecutor(BaseExecutor):
                 lambda: self._place_order_sync(token_id, qty, vwap_price),
             )
         except Exception as exc:
+            # The order may have reached the relayer and matched before the
+            # failure (e.g. response timeout) — we cannot assume unfilled.
             logger.error(
                 f"[LIVE] Order exception | {side} {qty:.0f} @ ${vwap_price:.4f} | {exc}",
                 exc_info=True,
             )
-            self._rollback(engine, snapshot)
-            return {"rejected": True, "status": "exception", "error": str(exc), "order_id": ""}
+            return await self._resolve_ambiguous(
+                action, engine, snapshot, token_id, qty, submitted_at,
+                reason=f"exception:{type(exc).__name__}",
+            )
 
         if not isinstance(response, dict):
-            logger.error(f"[LIVE] Unexpected response: {response!r}")
-            self._rollback(engine, snapshot)
-            return {"rejected": True, "status": "bad_response", "error": repr(response), "order_id": ""}
+            logger.error(f"[LIVE] Unparseable response: {str(response)[:300]!r}")
+            return await self._resolve_ambiguous(
+                action, engine, snapshot, token_id, qty, submitted_at,
+                reason="bad_response",
+            )
 
         # Pull the key fields from the CLOB response.
         # The field names observed in production: "orderID", "status", "errorMsg".
@@ -377,19 +397,127 @@ class LiveExecutor(BaseExecutor):
 
         # A FOK order that hits the book gets status "matched" or "" (live fill).
         # "unmatched" / "cancelled" means the price moved and the order was rejected.
-        if order_id and status not in ("unmatched", "cancelled", "canceled", "error"):
+        if order_id and status not in CLEAN_REJECTION_STATUSES:
             logger.warning(
                 f"[LIVE] FILLED | {side} {qty:.0f} @ ${vwap_price:.4f} | "
                 f"orderID={order_id} status={status!r}"
             )
             return {**action, "order_id": order_id, "live_status": status, "mode": "LIVE"}
 
-        logger.warning(
-            f"[LIVE] REJECTED | {side} {qty:.0f} @ ${vwap_price:.4f} | "
-            f"status={status!r} error={error!r} orderID={order_id!r}"
+        if status in CLEAN_REJECTION_STATUSES or error:
+            # Explicit relayer answer — definitively not filled. (B15: log
+            # the full response so unexpected shapes are debuggable.)
+            logger.warning(
+                f"[LIVE] REJECTED | {side} {qty:.0f} @ ${vwap_price:.4f} | "
+                f"status={status!r} error={error!r} orderID={order_id!r} | "
+                f"token={token_id[:16]}... | response={str(response)[:300]}"
+            )
+            self._rollback(engine, snapshot)
+            return {"rejected": True, "status": status, "error": error, "order_id": order_id}
+
+        # Dict with no order id, no status, no error — relayer answer is
+        # meaningless; the order may or may not have matched.
+        logger.error(f"[LIVE] Empty/unknown response shape: {str(response)[:300]}")
+        return await self._resolve_ambiguous(
+            action, engine, snapshot, token_id, qty, submitted_at,
+            reason="empty_response",
+        )
+
+    # ── Ambiguous-outcome reconciliation (B7) ────────────────────────
+
+    async def _resolve_ambiguous(
+        self,
+        action: dict,
+        engine,
+        snapshot: dict,
+        token_id: str,
+        qty: float,
+        submitted_at: float,
+        reason: str,
+    ) -> dict:
+        """
+        The submission outcome is unknown — the FOK may have matched.
+
+        Poll our own trade history for a fill matching this order. If one
+        appears, adopt it (engine state stays committed). If nothing shows
+        up, restore the snapshot and tell the runner to halt the window:
+        guessing here is how the engine desyncs from the CLOB.
+        """
+        logger.error(
+            f"[LIVE] AMBIGUOUS submission ({reason}) — "
+            f"polling trade history to reconcile..."
+        )
+        trade = await self._find_own_fill(token_id, qty, submitted_at)
+
+        if trade is not None:
+            price = float(trade.get("price") or action["vwap_price"])
+            logger.warning(
+                f"[LIVE] RECONCILED AS FILLED | {action['side']} {qty:.0f} "
+                f"@ ${price:.4f} | trade_id={trade.get('id', '')!r}"
+            )
+            return {
+                **action,
+                "order_id": trade.get("taker_order_id") or trade.get("id", ""),
+                "vwap_price": price,
+                "cost": price * qty,
+                "live_status": "reconciled",
+                "mode": "LIVE",
+                "reconciled": True,
+            }
+
+        logger.error(
+            f"[LIVE] UNRESOLVED ({reason}) — no matching trade found; "
+            f"rolling back and requesting window halt"
         )
         self._rollback(engine, snapshot)
-        return {"rejected": True, "status": status, "error": error, "order_id": order_id}
+        return {
+            "rejected": True,
+            "ambiguous": True,
+            "status": f"ambiguous:{reason}",
+            "error": reason,
+            "order_id": "",
+        }
+
+    async def _find_own_fill(
+        self, token_id: str, qty: float, submitted_at: float
+    ) -> Optional[dict]:
+        """Poll get_trades for a BUY of ~qty in this token since submission."""
+        loop = asyncio.get_running_loop()
+        params = TradeParams(asset_id=token_id, after=int(submitted_at) - 2)
+
+        for attempt in range(settings.LIVE_RECONCILE_ATTEMPTS):
+            if attempt > 0:
+                await asyncio.sleep(settings.LIVE_RECONCILE_DELAY_SECONDS)
+            try:
+                trades = await loop.run_in_executor(
+                    None, lambda: self._client.get_trades(params)
+                )
+            except Exception:
+                logger.exception("[LIVE] Reconciliation query failed")
+                continue
+            match = self._match_trade(trades or [], qty)
+            if match is not None:
+                return match
+        return None
+
+    @staticmethod
+    def _match_trade(trades: list, qty: float) -> Optional[dict]:
+        """Find a non-failed BUY trade whose size matches qty within tolerance."""
+        tolerance = settings.LIVE_RECONCILE_QTY_TOLERANCE
+        for trade in trades:
+            if not isinstance(trade, dict):
+                continue
+            if str(trade.get("side", "")).upper() != "BUY":
+                continue
+            if str(trade.get("status", "")).upper() == "FAILED":
+                continue
+            try:
+                size = float(trade.get("size", 0))
+            except (TypeError, ValueError):
+                continue
+            if qty > 0 and abs(size - qty) / qty <= tolerance:
+                return trade
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ from analytics.momentum import MomentumEngine
 from execution.pair_strategy import PairTradingEngine, PairConfig, WindowResult, polymarket_taker_fee
 from execution.pair_logger import log_pair_buy, log_window_settlement, log_pair_rejection, log_pair_filter
 from execution.executor import make_executor, BaseExecutor
+from execution.kill_switch import KillSwitch
 from execution.pair_dashboard import PairDashboard, build_state
 from execution.market_spec import MarketSpec, make_market_spec
 from execution.market_rotator import (
@@ -144,11 +145,14 @@ class PairRunner:
     """
 
     def __init__(self, mode: str = "paper", spec: MarketSpec = None, headless: bool = False,
-                 max_loss: float = None):
+                 max_loss: float = None, kill_switch: KillSwitch = None):
         self.mode = mode
         self.spec = spec or make_market_spec("btc", "5m")
         self.headless = headless
         self.max_loss = max_loss  # Kill switch: stop after losing this much
+        # Shared across runners when provided (headless) so --max-loss caps
+        # the SESSION, not each runner separately (B8).
+        self.kill_switch = kill_switch or KillSwitch(max_loss)
 
         # Two separate order books
         self.yes_book = OrderBook()
@@ -193,6 +197,11 @@ class PairRunner:
         self._connected = False
         self._msg_count = 0
         self._filter_log_times: dict = {}  # throttle filter CSV logging
+
+        # Safety state (B7/B8)
+        self._halt_entries: str = ""       # non-empty = no new entries this window (reason)
+        self._crash_streak: int = 0        # consecutive message-loop crashes without progress
+        self._last_crash_msg_count: int = 0
 
         # Cumulative stats across windows
         self.cumulative_pnl: float = 0.0
@@ -314,6 +323,9 @@ class PairRunner:
             self._zone_counts = {"Sniper": 0, "Value": 0, "Panic": 0}
             self._slippages = []
             self._window_volume = 0.0
+            self._halt_entries = ""
+            self._crash_streak = 0
+            self._last_crash_msg_count = 0
 
             # Snapshot Chainlink price at window open
             self._chainlink.snapshot_open()
@@ -342,12 +354,14 @@ class PairRunner:
             if self.windows_traded > 0 and self.windows_traded % report_interval == 0:
                 self._auto_report()
 
-            # Kill switch: stop if cumulative loss exceeds max_loss
-            if self.max_loss and self.cumulative_pnl <= -self.max_loss:
+            # Kill switch: stop if SESSION loss exceeds the cap (shared
+            # across runners in headless mode — B8)
+            if self.kill_switch.tripped():
                 self._chainlink.stop()
                 console.print(
-                    f"\n[bold red]  KILL SWITCH — Lost ${abs(self.cumulative_pnl):.2f} "
-                    f"(limit: ${self.max_loss:.0f}). Stopping.[/bold red]"
+                    f"\n[bold red]  KILL SWITCH — Session lost "
+                    f"${abs(self.kill_switch.realized_pnl):.2f} "
+                    f"(limit: ${self.kill_switch.max_loss:.0f}). Stopping.[/bold red]"
                 )
                 break
 
@@ -467,7 +481,10 @@ class PairRunner:
                             except asyncio.CancelledError:
                                 pass
 
-                        # Retrieve exceptions from done tasks
+                        # Retrieve exceptions from done tasks. A crashed
+                        # message loop is a BUG, not a connection drop —
+                        # surface it loudly and stop respinning if it
+                        # keeps dying without making progress (B7).
                         for task in done:
                             try:
                                 task.result()
@@ -475,8 +492,13 @@ class PairRunner:
                                 pass
                             except asyncio.CancelledError:
                                 pass
-                            except Exception as e:
-                                logger.debug(f"Task ended with: {e}")
+                            except Exception:
+                                label = "message loop" if task is msg_task else "ui/watchdog"
+                                logger.exception(
+                                    f"[{self.spec.display_name}] {label} task crashed"
+                                )
+                                if task is msg_task and self._note_msg_crash():
+                                    self._running = False
 
                         # If watchdog finished, window is done
                         if not self._running:
@@ -601,6 +623,11 @@ class PairRunner:
 
     async def _try_evaluate(self):
         """Evaluate pair trading opportunity with current state."""
+        # Safety halt (B7/B8): an ambiguous live fill or a tripped kill
+        # switch stops NEW entries for the rest of the window.
+        if self._halt_entries:
+            return
+
         # Need both books initialized
         if not self.yes_book.is_initialized or not self.no_book.is_initialized:
             if self._msg_count % 500 == 1:
@@ -680,6 +707,35 @@ class PairRunner:
         if unmatched_usd > self.engine.config.max_unmatched_usd:
             return
 
+        # Kill switch (B8): check BEFORE entering, projecting the worst
+        # case where current unmatched exposure expires worthless.
+        # (Matched pairs cannot lose; unmatched cost is the at-risk capital.)
+        if self.kill_switch.tripped(unrealized_risk=unmatched_usd):
+            self._halt_entries = "kill switch"
+            console.print(
+                f"\n[bold red]  KILL SWITCH — projected session loss "
+                f"${abs(self.kill_switch.projected_pnl(unmatched_usd)):.2f} "
+                f"breaches limit ${self.kill_switch.max_loss:.0f}. "
+                f"No new entries this window.[/bold red]"
+            )
+            logger.error(
+                f"[{self.spec.display_name}] kill switch tripped pre-entry: "
+                f"realized={self.kill_switch.realized_pnl:+.2f} "
+                f"unmatched_risk={unmatched_usd:.2f}"
+            )
+            return
+        if self.kill_switch.near_limit(unrealized_risk=unmatched_usd):
+            console.print(
+                f"[bold yellow]  ⚠ Kill switch at "
+                f"{settings.KILL_SWITCH_WARN_FRACTION:.0%} — projected "
+                f"${abs(self.kill_switch.projected_pnl(unmatched_usd)):.2f} "
+                f"of ${self.kill_switch.max_loss:.0f} limit.[/bold yellow]"
+            )
+            logger.warning(
+                f"[{self.spec.display_name}] kill switch near limit: "
+                f"realized={self.kill_switch.realized_pnl:+.2f}"
+            )
+
         # Snapshot engine state BEFORE evaluate() so LiveExecutor can roll
         # back if the real CLOB order fails. PaperExecutor returns {} here.
         snapshot = self.executor.pre_snapshot(self.engine)
@@ -743,6 +799,20 @@ class PairRunner:
         )
         lat_ms = (time.time() - t0) * 1000
         if not action or action.get("rejected"):
+            # Ambiguous outcome (B7): the executor could not determine
+            # whether the order filled and has rolled back. Trading on
+            # top of unknown CLOB state is how the engine desyncs —
+            # halt new entries for the rest of this window.
+            if isinstance(action, dict) and action.get("ambiguous"):
+                self._halt_entries = action.get("status", "ambiguous")
+                console.print(
+                    f"\n[bold red]  ⚠ AMBIGUOUS LIVE ORDER ({self._halt_entries}) — "
+                    f"halting entries for this window. Verify positions on "
+                    f"polymarket.com before the next window.[/bold red]"
+                )
+                logger.error(
+                    f"[{self.spec.display_name}] entries halted: {self._halt_entries}"
+                )
             # Log CLOB rejection with full context
             market_label = (
                 f"{self.spec.display_name_long} — {self.window.time_label}"
@@ -896,6 +966,28 @@ class PairRunner:
                 f"Pairs: {self.engine.matched_pairs:.0f} "
                 f"Cost: ${self.engine.pair_cost:.4f}"
             )
+
+    def _note_msg_crash(self) -> bool:
+        """
+        Track consecutive message-loop crashes. Returns True when the
+        window should end: the loop has crashed MSG_CRASH_STREAK_LIMIT
+        times in a row without processing enough messages in between,
+        which means a deterministic bug — reconnecting would spin forever.
+        """
+        progressed = (
+            self._msg_count - self._last_crash_msg_count
+            >= settings.MSG_CRASH_PROGRESS_MESSAGES
+        )
+        self._last_crash_msg_count = self._msg_count
+        self._crash_streak = 1 if progressed else self._crash_streak + 1
+
+        if self._crash_streak >= settings.MSG_CRASH_STREAK_LIMIT:
+            console.print(
+                f"[bold red]  Message loop crashed {self._crash_streak}x "
+                f"without progress — ending window early.[/bold red]"
+            )
+            return True
+        return False
 
     async def _rotation_watchdog(self):
         """Watch for window expiry."""
@@ -1071,8 +1163,9 @@ class PairRunner:
         else:
             result = paper_result
 
-        # Update cumulative stats
+        # Update cumulative stats (per-runner display + shared kill switch)
         self.cumulative_pnl += result.net_pnl
+        self.kill_switch.record(result.net_pnl)
         self.windows_traded += 1
         if result.net_pnl > 0:
             self.windows_profitable += 1
