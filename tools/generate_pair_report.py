@@ -15,7 +15,6 @@ import os
 import csv
 import glob
 import time
-from typing import Optional
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side as XlSide
 from openpyxl.utils import get_column_letter
@@ -257,9 +256,12 @@ def _build_execution_log(wb, fills):
         v = _sf(f.get('vwap_fill'))
         total_slip += (v - q) * 100
         z = f.get('zone', '')
-        if z == 'Sniper': sniper_n += 1
-        elif z == 'Value': value_n += 1
-        elif z == 'Panic': panic_n += 1
+        if z == 'Sniper':
+            sniper_n += 1
+        elif z == 'Value':
+            value_n += 1
+        elif z == 'Panic':
+            panic_n += 1
 
     avg_slip = total_slip / len(fills) if fills else 0
 

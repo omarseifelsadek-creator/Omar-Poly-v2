@@ -1,16 +1,30 @@
 #!/usr/bin/env python3
-"""test_dashboard.py — Standalone test. No WebSocket needed."""
-import sys, os, time, traceback
+"""demo_dashboard.py — render the pair dashboard with fake data.
+
+Manual smoke tool (NOT a pytest test): verifies the Rich dashboard
+renders in your terminal without needing a WebSocket or live market.
+Run: python tools/demo_dashboard.py
+"""
+import os
+import sys
+import time
+import traceback
+from pathlib import Path
+
+# Runnable from anywhere — put the repo root on sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 print("Testing dashboard...")
 print(f"Terminal: {os.get_terminal_size()}")
 print(f"TERM: {os.environ.get('TERM', 'not set')}")
 
 try:
-    from execution.pair_dashboard import PairDashboard, build_state
+    from execution.pair_dashboard import PairDashboard
     print("✅ imported")
 except Exception as e:
-    print(f"❌ {e}"); traceback.print_exc(); sys.exit(1)
+    print(f"❌ {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 now = time.time()
 fake = {
@@ -47,8 +61,8 @@ fake = {
 dash = PairDashboard()
 
 # Quick buffer sanity check
-from io import StringIO
-from rich.console import Console
+from io import StringIO          # noqa: E402 — demo script, lazy on purpose
+from rich.console import Console  # noqa: E402
 cols, rows = os.get_terminal_size()
 c = Console(file=StringIO(), width=cols, height=rows, force_terminal=True, color_system="256", highlight=False)
 with c.capture() as cap:
@@ -57,7 +71,7 @@ out = cap.get()
 nl = out.count("\n")
 print(f"✅ rendered: {len(out)} chars, {nl} lines (term {cols}x{rows})")
 if nl < 5:
-    print(f"⚠️  suspiciously small output")
+    print("⚠️  suspiciously small output")
 
 print("\nDashboard in 2s... Ctrl+C to stop.")
 time.sleep(2)
@@ -101,6 +115,11 @@ except KeyboardInterrupt:
     dash.stop()
     print("\n✅ Stopped.")
 except Exception as e:
-    try: dash.stop()
-    except: sys.stdout.write("\033[?25h\033[?1049l"); sys.stdout.flush()
-    print(f"\n❌ {e}"); traceback.print_exc()
+    try:
+        dash.stop()
+    except Exception:
+        # restore cursor + leave alt screen if the dashboard died mid-render
+        sys.stdout.write("\033[?25h\033[?1049l")
+        sys.stdout.flush()
+    print(f"\n❌ {e}")
+    traceback.print_exc()

@@ -155,6 +155,19 @@ async def main():
     if not confirm_live_mode(args):
         return
 
+    # Direct token — intelligence dashboard on a single token (B19:
+    # this arg was parsed-but-dead for months; now does what the docs say)
+    if args.token:
+        from modes.intelligence import OBIApp
+
+        app = OBIApp(
+            token_id=args.token,
+            market_question="Direct Token Monitor",
+            trading_mode=args.mode,
+        )
+        await app.run()
+        return
+
     # BTC 5-minute auto-rotating mode
     if args.btc5m:
         await run_btc5m(args)
@@ -187,11 +200,11 @@ async def main():
             # Single headless runner for specific timeframe
             timeframes = [args.timeframe]
 
-        console.print(f"\n[bold #00FFFF]═══ HEADLESS MODE ═══[/bold #00FFFF]")
+        console.print("\n[bold #00FFFF]═══ HEADLESS MODE ═══[/bold #00FFFF]")
         console.print(f"  Asset: [bold]{asset.upper()}[/bold]  Timeframes: {', '.join(timeframes)}")
         console.print(f"  Mode: [bold]{mode}[/bold]  Runners: {len(timeframes)}")
-        console.print(f"  Logging to: data/logs/")
-        console.print(f"  [dim]Press Ctrl+C to stop all runners[/dim]\n")
+        console.print("  Logging to: data/logs/")
+        console.print("  [dim]Press Ctrl+C to stop all runners[/dim]\n")
 
         # One shared budget: --max-loss caps the SESSION, not each runner (B8)
         from execution.kill_switch import KillSwitch

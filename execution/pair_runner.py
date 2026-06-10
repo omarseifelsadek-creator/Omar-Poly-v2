@@ -175,7 +175,7 @@ class PairRunner:
     async def run(self):
         """Main entry point — rotates through 5-minute windows forever."""
         console.print("\n[bold cyan]═══ PAIR TRADING MODE ═══[/bold cyan]")
-        console.print(f"[dim]Strategy: Accumulate matched YES/NO pairs < $0.96[/dim]")
+        console.print("[dim]Strategy: Accumulate matched YES/NO pairs < $0.96[/dim]")
         console.print(f"[dim]Mode: {self.mode.upper()} | Settlement at window expiry[/dim]\n")
 
         # Install graceful stop handler ONLY when running standalone (not headless).
@@ -305,7 +305,7 @@ class PairRunner:
                 break
 
             # Rotate to next window — NEVER give up
-            console.print(f"\n[yellow]Rotating to next window...[/yellow]")
+            console.print("\n[yellow]Rotating to next window...[/yellow]")
             await asyncio.sleep(3)
 
             window = None
@@ -364,8 +364,9 @@ class PairRunner:
             try:
                 self._dashboard.start()
                 self._live = True
-            except Exception as e:
-                import sys, traceback as tb_mod
+            except Exception:
+                import sys
+                import traceback as tb_mod
                 sys.stdout.write(f"\033[91m═══ DASHBOARD START CRASH ═══\n{tb_mod.format_exc()}\033[0m\n")
                 sys.stdout.flush()
                 self._live = False
@@ -395,7 +396,7 @@ class PairRunner:
                             "assets_ids": [self.yes_token_id, self.no_token_id],
                         })
                         await ws.send(subscribe_msg)
-                        logger.info(f"Subscribed to YES + NO tokens")
+                        logger.info("Subscribed to YES + NO tokens")
 
                         # Run message loop until WS drops or window ends
                         msg_task = asyncio.create_task(self._message_loop(ws))
@@ -585,8 +586,8 @@ class PairRunner:
             logger.warning(
                 f"[DIAG] YES ask=${yes_ask} bid=${yes_bid} "
                 f"NO ask=${no_ask} bid=${no_bid} | "
-                f"YES asks={[(l.price, l.size) for l in yes_asks_top]} | "
-                f"NO asks={[(l.price, l.size) for l in no_asks_top]} | "
+                f"YES asks={[(lvl.price, lvl.size) for lvl in yes_asks_top]} | "
+                f"NO asks={[(lvl.price, lvl.size) for lvl in no_asks_top]} | "
                 f"pair_cost=${(yes_ask or 0)+(no_ask or 0):.4f} | "
                 f"T-{self.engine.time_remaining/60:.1f}m | msgs={self._msg_count}"
             )
@@ -813,7 +814,7 @@ class PairRunner:
         spread = (action.get("raw_price", 0) - best_bid) if best_bid else 0
 
         # Time-to-Hedge: seconds from earliest opposite leg to this fill
-        opp_legs = [l for l in self.engine.legs[:-1] if l.side == opp_side]
+        opp_legs = [leg for leg in self.engine.legs[:-1] if leg.side == opp_side]
         time_to_hedge = (
             round(time.time() - opp_legs[0].timestamp, 1) if opp_legs else None
         )
@@ -898,7 +899,7 @@ class PairRunner:
             snipe = " 🎯" if action.get("is_snipe") else ""
             vwap = action.get("vwap_price", action.get("fill_price", 0))
             console.print(
-                f"  [{color}]BUY {action['qty']:.0f} {side}[/{color}] "
+                f"  [{color}]BUY {action['qty']:.0f} {side}{snipe}[/{color}] "
                 f"@ VWAP ${vwap:.3f} "
                 f"(fill: ${action['fill_price']:.4f}) | "
                 f"Pairs: {self.engine.matched_pairs:.0f} "
@@ -1169,11 +1170,11 @@ class PairRunner:
         console.print(f"  Unmatched:      {result.unmatched_qty:.0f} {result.unmatched_side}")
         console.print(f"  Avg Pair Cost:  ${result.avg_pair_cost:.4f}")
         console.print(f"  Capital Used:   ${result.total_cost:.2f}")
-        console.print(f"  ─────────────────────────────────")
+        console.print("  ─────────────────────────────────")
         console.print(f"  Pair Profit:    [{pair_color}]${result.pair_profit:+.2f}[/{pair_color}]")
         console.print(f"  Gamble Result:  [{gamble_color}]${result.gamble_result:+.2f}[/{gamble_color}]")
         console.print(f"  [bold]Net PnL:        [{pnl_color}]${result.net_pnl:+.2f}[/{pnl_color}][/bold]")
-        console.print(f"  ─────────────────────────────────")
+        console.print("  ─────────────────────────────────")
         console.print(f"  Session PnL:    [{('green' if self.cumulative_pnl >= 0 else 'red')}]${self.cumulative_pnl:+.2f}[/]")
         console.print(f"  Windows: {self.windows_traded} ({self.windows_profitable} profitable)")
         console.print(f"  Total Pairs: {self.total_pairs:.0f}")
@@ -1193,7 +1194,7 @@ class PairRunner:
     def _auto_report(self):
         """Auto-generate Excel report every 12 windows with smart naming + memory cleanup."""
         try:
-            from generate_pair_report import generate_from_memory
+            from tools.generate_pair_report import generate_from_memory
 
             if not self._report_windows:
                 console.print("[yellow]  Auto-report: no window data buffered.[/yellow]")
@@ -1268,13 +1269,13 @@ class PairRunner:
         elif self.windows_traded > 0:
             # Fallback: generate from CSVs if buffer was already flushed
             try:
-                from generate_pair_report import generate_pair_report
+                from tools.generate_pair_report import generate_pair_report
                 generate_pair_report()
             except Exception:
                 pass
 
         console.print(f"\n[bold cyan]{'═'*60}[/bold cyan]")
-        console.print(f"[bold cyan]  PAIR TRADING SESSION COMPLETE[/bold cyan]")
+        console.print("[bold cyan]  PAIR TRADING SESSION COMPLETE[/bold cyan]")
         console.print(f"[bold cyan]{'═'*60}[/bold cyan]")
         console.print(f"  Windows Traded:   {self.windows_traded}")
         console.print(f"  Windows Won:      {self.windows_profitable} ({wr:.0f}%)")

@@ -283,6 +283,8 @@ class Metrics(BaseModel):
     cvd_5s: float = 0.0             # 5-second rolling CVD
     cvd_30s: float = 0.0            # 30-second rolling CVD
     cvd_divergence: bool = False     # True if price/CVD divergence detected
+    # Computed but no consumer yet (B17: kept deliberately) — ready-made
+    # ingredient for new-strategy signals; see compute_obi_velocity().
     obi_velocity_5s: float = 0.0    # 5s OBI rate of change
     obi_velocity_30s: float = 0.0   # 30s OBI rate of change
     obi_action: str = "STABLE"      # STACKING / PULLING / STABLE

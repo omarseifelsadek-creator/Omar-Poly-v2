@@ -243,9 +243,9 @@ class PairDashboard:
         tx.append("█" * filled, style=bc)
         tx.append("░" * (bw - filled), style="dim")
         tx.append(f" {ratio*100:.0f}%\n\n", style=bc)
-        tx.append(f"  Pairs:", style="dim")
+        tx.append("  Pairs:", style="dim")
         tx.append(f"{mp:.0f}", style="bold")
-        tx.append(f"  Skew:", style="dim")
+        tx.append("  Skew:", style="dim")
         ss = "green" if skew < 0.15 else "yellow" if skew < 0.3 else "bold red"
         tx.append(f"{skew:.2f}", style=ss)
 
@@ -261,15 +261,15 @@ class PairDashboard:
         else:
             cap_sty = "cyan"
             cap_tag = ""
-        tx.append(f"\n  Capital:", style="dim")
+        tx.append("\n  Capital:", style="dim")
         tx.append(f"${cap:.0f}", style=cap_sty)
         tx.append(f"/${cap_limit:.0f}", style="dim")
         if cap_tag:
             tx.append(cap_tag, style="bold red" if self.blink else "dim red")
 
-        tx.append(f"\n  YES:", style="dim")
+        tx.append("\n  YES:", style="dim")
         tx.append(f"${s.get('yavg',0):.4f}", style="green")
-        tx.append(f"  NO:", style="dim")
+        tx.append("  NO:", style="dim")
         tx.append(f"${s.get('navg',0):.4f}", style="red")
 
         title = "[bold]═ PAIR ENGINE ═[/]"
@@ -414,11 +414,11 @@ class PairDashboard:
         fb = s.get("fb", {})
 
         tx = Text()
-        tx.append(f" Fills:", style="dim")
+        tx.append(" Fills:", style="dim")
         tx.append(f"{exe}", style="bold green")
-        tx.append(f" Rej:", style="dim")
+        tx.append(" Rej:", style="dim")
         tx.append(f"{fr}/{fa}", style="bold red" if fr > 0 else "dim")
-        tx.append(f"\n Blocked:", style="dim")
+        tx.append("\n Blocked:", style="dim")
         tx.append(f"{filt}\n", style="yellow" if filt > 0 else "dim")
 
         top3 = sorted(fb.items(), key=lambda x: -x[1])[:3] if isinstance(fb, dict) else []
@@ -531,16 +531,16 @@ class PairDashboard:
         tx = Text()
         tx.append("\n PnL: ", style="dim")
         tx.append(f"${pnl:+.2f}\n", style=ps)
-        tx.append(f"\n W/L: ", style="dim")
+        tx.append("\n W/L: ", style="dim")
         tx.append(f"{wp}", style="green")
         tx.append(f"/{wt - wp}", style="red")
         tx.append(f" ({wr:.0f}%)\n", style="dim")
-        tx.append(f" Pairs: ", style="dim")
+        tx.append(" Pairs: ", style="dim")
         tx.append(f"{tp:.0f}\n", style="bold")
 
         if last:
             lp = last.get("net_pnl", 0)
-            tx.append(f"\n Last: ", style="dim")
+            tx.append("\n Last: ", style="dim")
             tx.append(f"${lp:+.2f}", style="green" if lp >= 0 else "red")
             tx.append(f" ({last.get('winner','?')})", style="dim")
 

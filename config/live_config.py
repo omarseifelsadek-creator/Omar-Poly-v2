@@ -6,7 +6,6 @@ No restart needed — edit the file and changes apply within seconds.
 """
 
 import os
-import time
 import configparser
 import logging
 from typing import Optional
@@ -112,7 +111,6 @@ class LiveConfig:
         self._rotation_side: str = "auto"
         self._telegram_enabled: bool = False
         self._alert_min_confidence: int = 75
-        self._rotate_early: int = 10
 
         # Initial load
         self._load()
@@ -154,7 +152,6 @@ class LiveConfig:
 
             # Rotation section
             self._rotation_side = cp.get("rotation", "side", fallback="auto").strip()
-            self._rotate_early = cp.getint("rotation", "rotate_early", fallback=10)
 
             # Alerts section
             self._telegram_enabled = cp.getboolean("alerts", "telegram", fallback=False)
@@ -206,10 +203,6 @@ class LiveConfig:
     @property
     def rotation_side(self) -> str:
         return self._rotation_side
-
-    @property
-    def rotate_early_seconds(self) -> int:
-        return self._rotate_early
 
     @property
     def telegram_enabled(self) -> bool:

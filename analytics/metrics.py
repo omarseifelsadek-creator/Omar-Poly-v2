@@ -17,7 +17,7 @@ Comments explain both WHAT the metric measures and WHY it matters.
 
 import time
 import numpy as np
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from config import settings
 from state.orderbook import OrderBook
@@ -28,9 +28,14 @@ from data.models import (
     WhaleEvent,
     LiquidityVoid,
     Side,
-    TradeEvent,
 )
 from analytics.detectors import run_all_detectors
+
+if TYPE_CHECKING:
+    # Imported lazily at runtime (inside functions) to avoid the
+    # metrics <-> momentum circular import; quoted annotations resolve here.
+    from analytics.cvd import CVDTracker
+    from analytics.momentum import MomentumEngine, MomentumState
 
 
 def compute_all_metrics(
@@ -405,7 +410,7 @@ def compute_sentiment_v3(
     The score is an OPINION, not a prediction. It summarizes the current
     microstructure state into a single number for quick assessment.
     """
-    from analytics.momentum import MarketRegime, MomentumState
+    from analytics.momentum import MarketRegime
 
     absorption_events = absorption_events or []
     sweep_events = sweep_events or []
@@ -547,6 +552,10 @@ def compute_obi_velocity(momentum_engine: "MomentumEngine") -> dict:
     Uses the momentum engine's OBI EMA tracker to compute
     windowed linear slopes, then classifies the action as
     STACKING (book building up), PULLING (book thinning), or STABLE.
+
+    STATUS (B17): computed on every tick but consumed by no signal,
+    insight, or UI yet — kept deliberately as a ready-made ingredient
+    for new-strategy development. Wire it or delete it consciously.
 
     Returns:
         dict with velocity_5s, velocity_30s, and action label.

@@ -23,9 +23,8 @@
   (maker = POLY_FUNDER, signatureType = 1, signature 130 chars); ≥ 1 clean multi-window session.
 
 **LIVE** (`--mode live` — real FOK orders, real money)
-- Hard prerequisites: **B7 (executor desync guard) and B8 (kill-switch timing) closed in
-  [BACKLOG.md](BACKLOG.md)** — as of 2026-06-10 both are OPEN; live trading before they close
-  is accepting those risks knowingly.
+- Hard prerequisites: B7 (ambiguous-fill reconciliation) and B8 (pre-entry kill switch)
+  — **both closed 2026-06-10**. Re-baseline (EXP-002) before resuming live size.
 - Start: one asset, one timeframe, minimum size (`buy_size_usd` 10), `--max-loss` set.
 - The startup gate requires typing `yes` (or `--yes` for scripted runs) — added 2026-06-10.
 
@@ -34,10 +33,10 @@
 - [ ] `.env` present with all 5 vars: `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_API_SECRET`,
       `POLY_API_PASSPHRASE`, `POLY_FUNDER` (startup now fails fast naming any missing var)
 - [ ] USDC balance confirmed in the funder (proxy) wallet on polymarket.com
-- [ ] `--max-loss N` set. **KNOWN LIMITATION (B8): only checked after each window settles** —
-      one in-flight window can exceed the cap before the halt fires
-- [ ] Params reviewed in `pair_runner.py:164` (v15 overrides) — **strategy.conf does NOT drive
-      pairs mode** (B12); editing the conf changes nothing here
+- [ ] `--max-loss N` set — checked before every entry incl. unmatched + unverified exposure;
+      shared across headless runners (B8, 2026-06-10)
+- [ ] Params reviewed in `strategy.conf` `[pairs]` (drives pairs mode since B12, 2026-06-10;
+      applied per window rotation, stamped to `pair_params_*.csv`)
 - [ ] Telegram alerts firing if configured (optional)
 - [ ] `data/logs/` writable; previous session's CSVs archived or noted in STRATEGY_LOG
 
@@ -66,12 +65,14 @@
    truth; engine state is memory-only and died with the process.**
 3. Reconcile: if one-sided (unmatched legs), decide — complete the pair manually on the website
    if pair cost still < $1.00, or hold to settlement and eat the directional exposure.
-4. **Partial procedure until B7 lands** — there is no automated resync; the steps above are manual.
+4. Ambiguous live submissions self-reconcile against trade history (B7); an UNRESOLVED
+   ambiguity halts the window and counts its cost as lost in the kill switch — manual position
+   verification on polymarket.com is still required before the next live session.
 
 ## 5. Post-Session
 
 1. CSVs land in `data/logs/` (`pair_buys_*`, `pair_windows_*`, `pair_filters_*`, `pair_rejections_*`).
-2. `python generate_pair_report.py` → Excel hourly report; `streamlit run streamlit_dashboard.py` for the 6-tab analysis.
+2. `python tools/generate_pair_report.py` → Excel hourly report; `streamlit run tools/streamlit_dashboard.py` for the 6-tab analysis.
 3. Write/close the experiment entry in [STRATEGY_LOG.md](STRATEGY_LOG.md) (mandatory Verdict).
 4. Update [HANDOFF.md](HANDOFF.md) if the session changed where things stand.
 

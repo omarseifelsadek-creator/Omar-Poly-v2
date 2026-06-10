@@ -34,12 +34,12 @@ MEMORY MANAGEMENT:
 
 import time
 import logging
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional
 
 from config import settings
-from data.models import Side, TradeEvent
+from data.models import Side
 
 logger = logging.getLogger(__name__)
 
@@ -297,14 +297,14 @@ class LevelTracker:
         """Get all levels that currently have liquidity."""
         levels = self._levels.values()
         if side is not None:
-            levels = [l for l in levels if l.side == side]
-        return [l for l in levels if l.is_alive]
+            levels = [lvl for lvl in levels if lvl.side == side]
+        return [lvl for lvl in levels if lvl.is_alive]
 
     def get_all_levels_with_history(self, side: Optional[Side] = None) -> list[LevelHistory]:
         """Get all tracked levels (including empty ones with recent history)."""
         levels = list(self._levels.values())
         if side is not None:
-            levels = [l for l in levels if l.side == side]
+            levels = [lvl for lvl in levels if lvl.side == side]
         return levels
 
     def get_size_change(self, price: float, side: Side, window_s: float = 3.0) -> tuple[float, float]:

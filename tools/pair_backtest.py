@@ -21,7 +21,6 @@ USAGE:
 import argparse
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -628,8 +627,8 @@ def sweep_parameter(date_str: str, param: str, values: list,
     base_overrides = base_overrides or {}
     rows = []
 
-    # Run baseline (no overrides beyond base)
-    baseline = run_backtest(date_str, base_overrides, verbose=False)
+    # Warm caches with a baseline pass (result unused — sweep rows below are the output)
+    run_backtest(date_str, base_overrides, verbose=False)
 
     for val in values:
         overrides = {**base_overrides, param: val}
@@ -717,7 +716,7 @@ def _print_summary(result: BacktestResult):
 
     if incomplete:
         print(f"  NOTE: {len(incomplete)} windows have incomplete fill data")
-        print(f"        (buys CSV missing fills). Stats below use")
+        print("        (buys CSV missing fills). Stats below use")
         print(f"        only the {nc} complete windows.")
         print()
 

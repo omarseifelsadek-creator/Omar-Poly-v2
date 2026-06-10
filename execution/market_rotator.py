@@ -20,7 +20,7 @@ import json
 import re
 import asyncio
 import logging
-from typing import Optional, Tuple
+from typing import Optional
 from dataclasses import dataclass
 
 import httpx
@@ -209,7 +209,7 @@ def _parse_end_date(
 
     if end_date_str:
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime
             clean = end_date_str.replace("Z", "+00:00")
             dt = datetime.fromisoformat(clean)
             parsed_ts = int(dt.timestamp())

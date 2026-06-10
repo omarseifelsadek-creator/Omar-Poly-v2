@@ -340,11 +340,11 @@ def generate_insights(
         div_dir = "bullish" if metrics.depth_divergence > 0 else "bearish"
         if metrics.depth_divergence > 0:
             _add("depth_divergence",
-                 f"↗️ Depth divergence: bids growing while asks shrinking — hidden bullish signal",
+                 "↗️ Depth divergence: bids growing while asks shrinking — hidden bullish signal",
                  "warning", div_dir)
         else:
             _add("depth_divergence",
-                 f"↘️ Depth divergence: asks growing while bids shrinking — hidden bearish signal",
+                 "↘️ Depth divergence: asks growing while bids shrinking — hidden bearish signal",
                  "warning", div_dir)
 
     # Volatility

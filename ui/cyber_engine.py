@@ -12,7 +12,6 @@ Usage:
 import asyncio
 import json
 import time
-import os
 import logging
 from collections import deque
 from dataclasses import dataclass, field

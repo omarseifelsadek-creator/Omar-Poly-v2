@@ -46,8 +46,10 @@ def test_small_orders_never_spoofing():
     tracker = LevelTracker()
     t = -50.0
     for _ in range(4):
-        tracker.record_change(0.55, Side.BUY, 100, now_ms(t)); t += 2
-        tracker.record_change(0.55, Side.BUY, 0, now_ms(t)); t += 2
+        tracker.record_change(0.55, Side.BUY, 100, now_ms(t))
+        t += 2
+        tracker.record_change(0.55, Side.BUY, 0, now_ms(t))
+        t += 2
     assert detect_spoofing(tracker) == []
 
 

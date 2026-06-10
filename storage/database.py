@@ -40,7 +40,6 @@ from data.models import (
     Metrics,
     Insight,
     TradeEvent,
-    Side,
 )
 
 logger = logging.getLogger(__name__)
@@ -252,8 +251,8 @@ class Database:
         bids = ob.get_sorted_bids(max_levels=50)
         asks = ob.get_sorted_asks(max_levels=50)
 
-        bids_json = json.dumps([{"p": l.price, "s": l.size} for l in bids])
-        asks_json = json.dumps([{"p": l.price, "s": l.size} for l in asks])
+        bids_json = json.dumps([{"p": lvl.price, "s": lvl.size} for lvl in bids])
+        asks_json = json.dumps([{"p": lvl.price, "s": lvl.size} for lvl in asks])
 
         sql = """
             INSERT INTO ob_snapshots
@@ -454,8 +453,7 @@ class Database:
         or every 2 seconds, whichever comes first.
         """
         batch_size = 50
-        flush_interval = 2.0
-        last_flush = time.time()
+        flush_interval = 2.0  # the queue-get timeout IS the time-based flush
 
         while True:
             try:
@@ -475,7 +473,6 @@ class Database:
                 # Commit the batch
                 if count > 0 and self._db:
                     await self._db.commit()
-                    last_flush = time.time()
 
             except asyncio.CancelledError:
                 break

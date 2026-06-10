@@ -81,7 +81,7 @@ class OBIApp:
         """
         console.print(f"\n[bold cyan]Starting OBI v5.0 Intelligence Dashboard for:[/bold cyan] {self.market_question}")
         console.print(f"[dim]Token: {self.token_id[:40]}...[/dim]")
-        console.print(f"[dim]Mode: Market Intelligence (read-only)[/dim]")
+        console.print("[dim]Mode: Market Intelligence (read-only)[/dim]")
 
         # Initialize database
         if self.db:
@@ -298,12 +298,12 @@ class OBIApp:
         mins, secs = divmod(elapsed, 60)
 
         # Print session summary
-        console.print(f"\n[bold cyan]═══ SESSION SUMMARY ═══[/bold cyan]")
-        console.print(f"  Mode:      [bold]INTELLIGENCE[/bold]")
+        console.print("\n[bold cyan]═══ SESSION SUMMARY ═══[/bold cyan]")
+        console.print("  Mode:      [bold]INTELLIGENCE[/bold]")
         console.print(f"  Duration:  {mins}m {secs}s")
         console.print(f"  Messages:  {self.ui._messages_count}")
         console.print(f"  CVD:       {self.cvd_tracker.cumulative:+,.0f} ({self.cvd_tracker.trade_count} trades)")
-        console.print(f"[dim]═══════════════════════[/dim]\n")
+        console.print("[dim]═══════════════════════[/dim]\n")
 
         # Send final status via Telegram
         await self.telegram.send_shutdown({"mode": "intelligence", "duration": elapsed})

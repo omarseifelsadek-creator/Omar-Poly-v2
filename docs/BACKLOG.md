@@ -13,9 +13,9 @@
 
 ## Later (P2 — structural)
 
-- [ ] B13-residual · `pair_runner.py` still ~1230 lines after extracting ChainlinkTracker + resolution chain — further decomposition (session stats/reporting) best done alongside B12.
-- [ ] B17 · `obi_velocity_5s/30s`: wire into signals or remove (audit S5).
-- [ ] B19 · `--token` CLI arg is parsed but never consumed (silently falls through to the synthetic engine); `select_market_interactive`/`_display_and_pick_market` are dead code; OBIApp is only reachable via `--btc5m`. Decide: rewire the direct-token intelligence path or remove the arg + dead selectors (now in `modes/select.py`). CLAUDE.md/README document `--token` as working.
+- [ ] B13-residual · `pair_runner.py` still ~1230 lines after extracting ChainlinkTracker + resolution chain — further decomposition (session stats/reporting) when convenient.
+- [ ] B20 · Unify the duplicated `_should_emit` dedup logic in `interpreter.py`/`signals.py` into a shared helper; needs dedup-behavior tests first.
+- [ ] B21 · Momentum regime thresholds still hardcoded in `momentum.py:_detect_regime` (audit S4) — move to settings when regime tuning becomes a need.
 
 ## Ideas (unprioritized parking lot — new-strategy candidates graduate to STRATEGY_LOG)
 
@@ -23,6 +23,9 @@
 
 ## Done
 
+- [x] 2026-06-10 · Cleanup sweep · ruff adopted (pyproject.toml, requirements-dev.txt), 113 findings → 0; dead `rotate_early` key removed; lost 🎯 snipe marker restored to BUY output; analysis scripts → `tools/` (test_dashboard → demo_dashboard); RUNBOOK stale B7/B8/B12 claims fixed.
+- [x] 2026-06-10 · B19 · `--token` rewired to launch OBIApp directly (was parsed-but-dead); 171 lines of dead selectors removed from modes/select.py.
+- [x] 2026-06-10 · B17 · `obi_velocity_5s/30s` kept deliberately — documented as "computed, awaiting consumer" in models.py + metrics.py for new-strategy work.
 - [x] 2026-06-10 · B12 · `[pairs]` section in strategy.conf drives PairConfig: per-window reload (never mid-window), active set stamped to `pair_params_*.csv` sidecar, v15 fallbacks, typo'd-key warnings. Experiments = edit conf, no code changes.
 - [x] 2026-06-10 · B13 · main.py 1144→325 lines (modes/ package: intelligence, select, btc5m); pair_runner 1393→~1230 (ChainlinkTracker → chainlink_feed.py, resolution chain → window_settler.py). Residual tracked above.
 - [x] 2026-06-10 · B14 · 46 analytics characterization tests (metrics/detectors/momentum/CVD) + hermetic conftest (suite can't touch data/logs). 74 tests total.

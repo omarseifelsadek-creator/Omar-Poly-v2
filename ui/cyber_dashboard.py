@@ -568,7 +568,7 @@ class CyberDashboard:
         all_levels = list(bids[:2]) + list(asks[:2])
         if not all_levels:
             return [f"  [{C_DIM}]no data[/{C_DIM}]"]
-        max_sz = max(l.size for l in all_levels) or 1
+        max_sz = max(lvl.size for lvl in all_levels) or 1
         bw = 10
         result = []
         for level in reversed(asks[:2]):

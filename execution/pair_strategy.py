@@ -25,7 +25,7 @@ BLOCKCHAIN CLOB EXECUTION MODEL (Polymarket on Polygon):
 import time
 import random
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, List, Tuple
 
 logger = logging.getLogger(__name__)

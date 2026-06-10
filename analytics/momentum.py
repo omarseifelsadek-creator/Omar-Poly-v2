@@ -474,7 +474,6 @@ class MomentumEngine:
         price_strength = self._price.trend_strength
 
         # OBI signals
-        obi_vel = self._obi.velocity
         obi_strength = self._obi.trend_strength
 
         # Flow signals

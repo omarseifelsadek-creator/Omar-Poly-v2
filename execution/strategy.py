@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from data.models import Metrics, Side
+from data.models import Metrics
 from analytics.signals import TradeSignal
 
 logger = logging.getLogger(__name__)

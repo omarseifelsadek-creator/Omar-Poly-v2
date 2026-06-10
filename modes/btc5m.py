@@ -29,7 +29,7 @@ async def run_btc5m(args):
 
     console.print("\n[bold cyan]═══ BTC 5-Minute Auto Mode ═══[/bold cyan]")
     console.print(f"[dim]Mode: {args.mode.upper()} | Config: config/strategy.conf (edit live)[/dim]")
-    console.print(f"[dim]Auto-rotates every 5 minutes[/dim]\n")
+    console.print("[dim]Auto-rotates every 5 minutes[/dim]\n")
 
     live_conf = LiveConfig()
     side = live_conf.rotation_side if args.btc5m_side == "auto" else args.btc5m_side
@@ -115,7 +115,7 @@ async def run_btc5m(args):
             await app._shutdown()
 
         # Rotate to next window — keep trying until we find one
-        console.print(f"\n[yellow]Rotating to next 5-minute window...[/yellow]")
+        console.print("\n[yellow]Rotating to next 5-minute window...[/yellow]")
         await asyncio.sleep(3)  # Small delay for next window to appear
 
         window = None

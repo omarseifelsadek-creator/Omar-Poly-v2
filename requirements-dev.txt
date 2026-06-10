@@ -1,0 +1,5 @@
+# Development tools — not needed to run the bot.
+# Install: pip install -r requirements-dev.txt
+pytest>=9.0
+ruff>=0.8
+pyflakes>=3.2

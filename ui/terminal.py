@@ -29,12 +29,11 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich.align import Align
 
 from config import settings
 from state.orderbook import OrderBook
 from state.level_tracker import LevelTracker
-from data.models import Metrics, Insight, TradeEvent, Side
+from data.models import Metrics, Insight, Side
 
 
 # ──────────────────────────────────────────────────────────────
@@ -764,25 +763,25 @@ class TerminalUI:
         t = Text()
         elapsed = int(time.time() - self._start_time)
         mins, secs = divmod(elapsed, 60)
-        t.append(f" Ctrl+C exit", style=C_DIM)
-        t.append(f"  │  ", style=C_DIM)
-        t.append(f"[ ] resize V", style=C_DIM)
-        t.append(f"  ", style=C_DIM)
-        t.append(f"{{ }} resize H", style=C_DIM)
-        t.append(f"  │  ", style=C_DIM)
-        t.append(f"OBI v5.0 INTEL", style=C_MUTED)
-        t.append(f"  │  ", style=C_DIM)
+        t.append(" Ctrl+C exit", style=C_DIM)
+        t.append("  │  ", style=C_DIM)
+        t.append("[ ] resize V", style=C_DIM)
+        t.append("  ", style=C_DIM)
+        t.append("{ } resize H", style=C_DIM)
+        t.append("  │  ", style=C_DIM)
+        t.append("OBI v5.0 INTEL", style=C_MUTED)
+        t.append("  │  ", style=C_DIM)
         t.append(f"Session {mins:02d}:{secs:02d}", style=C_DIM)
-        t.append(f"  │  ", style=C_DIM)
+        t.append("  │  ", style=C_DIM)
         t.append(f"Msgs {self._messages_count}", style=C_DIM)
         if self._db_stats:
             s = self._db_stats
-            t.append(f"  │  ", style=C_DIM)
+            t.append("  │  ", style=C_DIM)
             t.append(f"DB {s.get('trades', 0)}t {s.get('ob_snapshots', 0)}s {s.get('events', 0)}e", style=C_DIM)
         if self._rotation_remaining > 0:
             rm, rs = divmod(int(self._rotation_remaining), 60)
             rc = C_ASK if self._rotation_remaining < 30 else C_WARN if self._rotation_remaining < 60 else C_DIM
-            t.append(f"  │  ", style=C_DIM)
+            t.append("  │  ", style=C_DIM)
             t.append(f"Rotate {rm}:{rs:02d}", style=rc)
             t.append(f" (#{self._rotation_count})", style=C_DIM)
         return t
@@ -814,7 +813,7 @@ class TerminalUI:
     def _get_max_size(self) -> float:
         bids = self.ob.get_sorted_bids(max_levels=settings.OB_DISPLAY_LEVELS)
         asks = self.ob.get_sorted_asks(max_levels=settings.OB_DISPLAY_LEVELS)
-        sizes = [l.size for l in bids] + [l.size for l in asks]
+        sizes = [lvl.size for lvl in bids] + [lvl.size for lvl in asks]
         return max(sizes) if sizes else 1.0
 
     def _render_sparkline(self) -> str:

@@ -1,0 +1,18 @@
+# Tooling config only — the project is not packaged.
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+extend-exclude = ["research/legacy", "env", "data"]
+
+[tool.ruff.lint]
+# Correctness-focused: pyflakes (F) + the pycodestyle error classes that
+# indicate real problems. Style churn (line length etc.) deliberately off.
+select = ["F", "E4", "E7", "E9"]
+ignore = [
+    "E731",  # lambda assignment — used deliberately in executor stubs
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Moved-verbatim mode modules keep their original import surface
+"tests/*" = ["E712"]  # `== True` reads fine in assertions

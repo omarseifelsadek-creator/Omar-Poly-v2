@@ -20,7 +20,6 @@ import json
 import os
 import time
 import logging
-import signal
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -31,7 +30,7 @@ from config import settings
 from data.message_parser import parse_messages
 from data.models import BookSnapshot, PriceChangeEvent, TradeEvent
 from state.orderbook import OrderBook
-from execution.market_spec import MarketSpec, make_market_spec
+from execution.market_spec import MarketSpec
 from execution.market_rotator import MarketRotator, MarketWindow
 from execution.pair_strategy import polymarket_taker_fee
 
@@ -173,9 +172,9 @@ class BookRecorder:
     async def run(self):
         console.print(f"\n[bold cyan]  L2 RECORDER — {self.spec.display_name}[/bold cyan]")
         console.print(f"  Snapshot interval: {SNAPSHOT_INTERVAL}s + on-trade | Depth: {BOOK_DEPTH} levels")
-        console.print(f"  Oracle: Chainlink BTC/USD | Latency: server vs local")
+        console.print("  Oracle: Chainlink BTC/USD | Latency: server vs local")
         console.print(f"  Output: {LOG_DIR}/l2_*.csv")
-        console.print(f"  [dim]Press Ctrl+C to stop[/dim]\n")
+        console.print("  [dim]Press Ctrl+C to stop[/dim]\n")
 
         self._oracle.start()
 
@@ -203,7 +202,7 @@ class BookRecorder:
                 if self._stop:
                     break
 
-                console.print(f"  [yellow]Rotating to next window...[/yellow]")
+                console.print("  [yellow]Rotating to next window...[/yellow]")
                 await asyncio.sleep(3)
 
                 window = None
@@ -228,7 +227,7 @@ class BookRecorder:
             self._close()
             self._oracle.stop()
             await rotator.stop()
-            console.print(f"\n[bold cyan]  Recording stopped.[/bold cyan]")
+            console.print("\n[bold cyan]  Recording stopped.[/bold cyan]")
             console.print(f"  Windows: {self._windows_recorded} | Snapshots: {self._snap_count} | Trades: {self._trade_count}")
 
     async def _record_window(self, window: MarketWindow):

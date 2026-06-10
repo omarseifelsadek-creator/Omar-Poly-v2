@@ -35,7 +35,7 @@ because the edge compounds over many trades.
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, Callable
+from typing import Optional
 
 from data.models import Metrics, Side
 from research.replay import ReplayResult

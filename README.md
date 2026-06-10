@@ -286,11 +286,11 @@ WebSocket msg
 ## Research Tools
 
 ```bash
-python3 research_cli.py summary
-python3 research_cli.py heatmap
-python3 research_cli.py replay --minutes 60
-python3 research_cli.py backtest --minutes 120
-python3 research_cli.py export --output-dir exports/
+python3 tools/research_cli.py summary
+python3 tools/research_cli.py heatmap
+python3 tools/research_cli.py replay --minutes 60
+python3 tools/research_cli.py backtest --minutes 120
+python3 tools/research_cli.py export --output-dir exports/
 ```
 
 ---

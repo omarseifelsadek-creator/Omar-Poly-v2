@@ -21,7 +21,7 @@ for the entire session and only resets on restart.
 
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from config import settings
 from data.models import TradeEvent, Side

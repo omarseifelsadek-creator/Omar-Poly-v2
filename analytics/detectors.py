@@ -35,7 +35,6 @@ tune, and replace independently.
 
 import time
 import logging
-from typing import Optional
 
 from config import settings
 from state.orderbook import OrderBook

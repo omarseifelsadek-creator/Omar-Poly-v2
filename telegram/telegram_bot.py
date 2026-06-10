@@ -27,7 +27,7 @@ from typing import Optional
 
 import httpx
 
-from data.models import Metrics, Side
+from data.models import Metrics
 from analytics.signals import TradeSignal
 
 logger = logging.getLogger(__name__)

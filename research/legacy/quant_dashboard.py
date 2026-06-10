@@ -1,4 +1,4 @@
-"""LEGACY — superseded by streamlit_dashboard.py (repo root). Kept for reference.
+"""LEGACY — superseded by tools/streamlit_dashboard.py. Kept for reference.
 Requires scikit-learn, which is intentionally NOT in requirements.txt."""
 import streamlit as st
 import pandas as pd

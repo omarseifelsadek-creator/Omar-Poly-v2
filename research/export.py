@@ -24,7 +24,6 @@ import os
 import sqlite3
 import time
 import logging
-from typing import Optional
 
 from config import settings
 

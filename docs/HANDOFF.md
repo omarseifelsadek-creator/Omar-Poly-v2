@@ -3,18 +3,18 @@
 > Claude: read this FIRST each session. Overwrite (don't append) at session end or after any
 > major milestone. Keep under 60 lines — git history is the archive.
 
-**Updated:** 2026-06-10 (night) · **Branch:** main · **EXP-002 paper run LIVE in Omar's terminal**
+**Updated:** 2026-06-10 (late evening) · **Branch:** main · **EXP-002 paper run LIVE in Omar's terminal**
 
 ## Current Focus
 
-All planned phases done (audit → criticals → live-safety → resilience → tests → splits). EXP-002 baseline accumulating overnight. Next session: close EXP-002, then B12.
+Everything done: audit → criticals → live-safety → resilience → tests → splits → B12 → full cleanup (ruff, dead code, --token rewired, tools/). EXP-002 accumulating. Next: close EXP-002, then new-strategy work.
 
 ## State of the World
 
 - **EXP-002 running in Omar's own terminal** (foreground, started ~18:25 Jun 10, btc 5m+15m paper, caffeinate). Morning: Omar Ctrl+C once → settle → say "close EXP-002".
-- Suite: **74 tests green** (`env/bin/python -m pytest tests/`). Pyflakes clean of real issues.
-- Structure: main.py is a 325-line dispatcher → `modes/` (intelligence/select/btc5m); pair_runner ~1230 with `chainlink_feed.py` + `window_settler.py` extracted.
-- 18 backlog items done today (B1-B11, B13-B16, B18 + criticals). Open: B12, B17, B19, B13-residual.
+- Suite: **82 tests green**; `env/bin/python -m ruff check .` fully clean (config in pyproject.toml; dev deps in requirements-dev.txt).
+- Structure: main.py = thin dispatcher → `modes/`; analysis scripts in `tools/` (research_cli, streamlit_dashboard, generate_pair_report, pair_backtest, demo_dashboard); `--token` works again (OBIApp direct).
+- 21 backlog items done today (B1-B19 except residuals). Open: B13-residual, B20 (dedup unify), B21 (regime thresholds → settings) — all P2.
 
 ## Next Steps (in order)
 

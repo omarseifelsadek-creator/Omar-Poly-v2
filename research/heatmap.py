@@ -33,7 +33,6 @@ import sqlite3
 import time
 import os
 import logging
-from typing import Optional
 from datetime import datetime
 
 from config import settings
