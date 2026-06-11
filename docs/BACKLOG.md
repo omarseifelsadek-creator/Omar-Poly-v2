@@ -24,6 +24,8 @@
 
 ## Done
 
+- [x] 2026-06-10 · Synthetic Market Microstructure Engine DELETED (~1,330 lines: ui/cyber_engine, ui/cyber_dashboard, --slug/--search args, synthetic-only pickers). No-flag default is now the pair-trading menu. Menu-chosen live mode now passes the typed-yes gate (was a bypass).
+
 - [x] 2026-06-10 · EXP-002 · v15 paper baseline CLOSED: **+$11.69/window avg, std $21.46, 61% win rate, n=18** (BTC 5m+15m, 3.5h evening session). Full entry in STRATEGY_LOG Part 2.
 
 - [x] 2026-06-10 · Cleanup sweep · ruff adopted (pyproject.toml, requirements-dev.txt), 113 findings → 0; dead `rotate_early` key removed; lost 🎯 snipe marker restored to BUY output; analysis scripts → `tools/` (test_dashboard → demo_dashboard); RUNBOOK stale B7/B8/B12 claims fixed.

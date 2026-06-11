@@ -26,19 +26,17 @@ via WebSocket, multi-phase signal generation, paper/dry-run/live execution.
 ```bash
 source env/bin/activate   # canonical local venv (has py-clob-client for live trading)
 
-# Interactive market selector
+# Pair trading — interactive menu (the no-flag DEFAULT)
 python main.py
 
-# Direct market connection
-python main.py --token <TOKEN_ID>
-python main.py --slug <market-slug>
-python main.py --search "keyword"
-
-# BTC 5-minute auto-rotating
-python main.py --btc5m [--btc5m-side auto|up|down]
-
-# Pair trading (YES+NO accumulation)
+# Pair trading, menu skipped (YES+NO accumulation)
 python main.py --pairs [--asset btc|eth|sol|xrp] [--timeframe 5m|15m]
+
+# Intelligence dashboard on a single token (any Polymarket market)
+python main.py --token <TOKEN_ID>
+
+# BTC 5-minute auto-rotating intelligence dashboard
+python main.py --btc5m [--btc5m-side auto|up|down]
 
 # Headless (no dashboard, CSV logging only, both BTC timeframes: 5m + 15m)
 python main.py --headless

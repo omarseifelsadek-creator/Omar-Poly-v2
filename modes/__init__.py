@@ -10,6 +10,7 @@ to the right mode module.
 | btc5m.py        | --btc5m             | Auto-rotating 5m windows around OBIApp |
 | select.py       | (interactive menus) | Market pickers shared by modes         |
 
-Pairs / headless / record / synthetic remain inline in main() — each is
-a short wiring block around classes that live in execution/ and ui/.
+Pairs (the no-flag default) / headless / record remain inline in main() —
+each is a short wiring block around classes that live in execution/.
+The synthetic visualization engine was removed 2026-06-10.
 """

@@ -6,10 +6,11 @@ themselves live in modes/ (intelligence dashboard, btc5m rotation,
 market pickers) and execution/ (pairs, recorder).
 
 HOW TO RUN:
-    python main.py                  # Synthetic Market Microstructure Engine
-    python main.py --btc5m          # Auto-rotating intelligence dashboard
-    python main.py --pairs          # Pair trading (YES+NO accumulation)
+    python main.py                  # Pair trading (interactive menu — the default)
+    python main.py --pairs          # Same, or add --asset/--timeframe to skip the menu
     python main.py --headless       # Both BTC timeframes, CSV logging only
+    python main.py --token <ID>     # Intelligence dashboard on a single token
+    python main.py --btc5m          # Auto-rotating intelligence dashboard
     python main.py --record         # L2 book recorder for backtesting
 """
 
@@ -20,14 +21,8 @@ import sys
 
 from rich.console import Console
 
-from data.rest_client import RestClient
 from modes.btc5m import run_btc5m
-from modes.select import (
-    select_pair_market,
-    _extract_both_tokens,
-    _select_market_for_engine,
-    _display_and_pick_market_raw,
-)
+from modes.select import select_pair_market
 
 # Configure logging (only show warnings+ to avoid cluttering the terminal)
 logging.basicConfig(
@@ -46,23 +41,15 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                              # Interactive market selector
-  python main.py --search "bitcoin"           # Search for a market
-  python main.py --slug will-btc-hit-100k     # Use Polymarket URL slug
-  python main.py --token <TOKEN_ID>           # Direct token ID
+  python main.py                              # Pair trading (interactive menu)
+  python main.py --pairs --asset btc --timeframe 5m --mode paper
+  python main.py --headless --max-loss 50    # Both BTC timeframes, shared kill switch
+  python main.py --token <TOKEN_ID>           # Intelligence dashboard on one token
         """,
     )
     parser.add_argument(
         "--token", type=str, default=None,
-        help="Polymarket token ID to monitor",
-    )
-    parser.add_argument(
-        "--slug", type=str, default=None,
-        help="Polymarket market URL slug",
-    )
-    parser.add_argument(
-        "--search", type=str, default=None,
-        help="Search for markets by keyword",
+        help="Polymarket token ID to monitor (intelligence dashboard)",
     )
     parser.add_argument(
         "--debug", action="store_true",
@@ -268,67 +255,26 @@ async def main():
                 )
         return
 
-    # Pair trading mode
-    if args.pairs:
-        from execution.pair_runner import PairRunner
-        from execution.market_spec import make_market_spec
-        if args.asset and args.timeframe:
-            spec = make_market_spec(args.asset, args.timeframe)
-            mode = args.mode
-        else:
-            spec, mode = select_pair_market()
-        runner = PairRunner(mode=mode, spec=spec, max_loss=args.max_loss)
-        await runner.run()
-        return
+    # Pair trading — explicit --pairs or the no-flag default (the synthetic
+    # visualization engine that used to own the default was removed 2026-06-10)
+    from execution.pair_runner import PairRunner
+    from execution.market_spec import make_market_spec
 
-    # ── Default: Synthetic Market Microstructure Engine ──
-    from ui.cyber_engine import SyntheticEngine
+    if args.pairs and args.asset and args.timeframe:
+        spec = make_market_spec(args.asset, args.timeframe)
+        mode = args.mode
+    else:
+        spec, mode = select_pair_market()
 
-    yes_token = None
-    no_token = None
-    question = ""
+    # The startup gate ran against the CLI --mode; if live was chosen in
+    # the interactive menu instead, it must pass the same typed-yes gate.
+    if mode == "live" and args.mode != "live":
+        args.mode = mode
+        if not confirm_live_mode(args):
+            return
 
-    if args.slug:
-        rest = RestClient()
-        market = await rest.get_market_by_slug(args.slug)
-        await rest.close()
-        if market:
-            result = _extract_both_tokens(market)
-            if result:
-                yes_token, no_token, question = result
-
-    elif args.search:
-        rest = RestClient()
-        markets = await rest.search_markets(args.search)
-        await rest.close()
-        if markets:
-            selected = _display_and_pick_market_raw(markets)
-            if selected:
-                result = _extract_both_tokens(selected)
-                if result:
-                    yes_token, no_token, question = result
-
-    # Interactive selection if nothing resolved yet
-    if not yes_token:
-        result = await _select_market_for_engine()
-        if result:
-            yes_token, no_token, question = result
-
-    if not yes_token or not no_token:
-        console.print("[red]No market selected (need YES + NO tokens). Exiting.[/red]")
-        return
-
-    console.print(f"\n[bold]Market:[/bold] {question}")
-    console.print(f"[#00FFFF]YES:[/#00FFFF] {yes_token[:40]}...")
-    console.print(f"[#FF1493]NO:[/#FF1493]  {no_token[:40]}...")
-    console.print()
-
-    engine = SyntheticEngine(
-        yes_token_id=yes_token,
-        no_token_id=no_token,
-        market_question=question,
-    )
-    await engine.run()
+    runner = PairRunner(mode=mode, spec=spec, max_loss=args.max_loss)
+    await runner.run()
 
 
 if __name__ == "__main__":

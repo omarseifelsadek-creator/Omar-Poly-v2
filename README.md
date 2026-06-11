@@ -51,12 +51,10 @@ Instead of scrolling through a ladder of prices, you get:
 ## Quick Start
 
 ```bash
-# Interactive market selector
+# Pair trading — interactive menu (the default)
 python3 main.py
 
-# Direct launches (skip the menu)
-python3 main.py --search "bitcoin"
-python3 main.py --slug will-btc-hit-100k-in-2025
+# Intelligence dashboard on any market's token
 python3 main.py --token <TOKEN_ID>
 ```
 
