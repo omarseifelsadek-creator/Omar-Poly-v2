@@ -32,23 +32,27 @@ cost ≤ $0.96 → ≥ ~4¢ gross spread per pair.
 (0% < 200ms ask age, 50% 200–500ms, 100% > 500ms). Live: FOK orders via CLOB, engine-state
 rollback on rejection. Settlement: Chainlink → Binance → Gamma → order-book fallback.
 
-**Key params (where defined matters — see CLAUDE.md warning):**
+**Key params — ALL tunables live in `config/strategy.conf [pairs]` since B12 (2026-06-10);
+re-read per window rotation, stamped per window to `data/logs/pair_params_*.csv`:**
 
-| Param | Value | Defined in |
+| Param | v15 value | Notes |
 |---|---|---|
-| target_pair_cost | 0.96 | PairConfig default (`pair_strategy.py`) |
-| max_pair_cost | **0.96** (v15; default 0.99) | override in `pair_runner.py:164` |
-| max_skew_pct | **0.30** (v15; default 0.50) | override in `pair_runner.py` |
-| atomic_entry_max_pair | **0.99** (was 1.05) | override in `pair_runner.py` |
-| obi_delay_threshold / flow_delay_threshold | **0.85 / 0.75** (v15) | override in `pair_runner.py` |
-| buy_size_usd / max_position_usd | 10 / 100 (panic 116) | PairConfig defaults |
-| max_unmatched_usd | 30 | PairConfig (config-driven since 2026-06-10) |
-| min_first_leg_price / sniper_threshold | 0.15 / 0.35 | PairConfig defaults |
-| panic_time_seconds, theta_*, sniper_signal_min_time | spec-derived (10s/180s/30s/90s @ 5m) | `market_spec.py` properties |
+| target_pair_cost / max_pair_cost | 0.96 / **0.96** | v15 tightened max from 0.99 |
+| max_skew_pct | **0.30** | v15 tightened from 0.50 |
+| atomic_entry_max_pair | **0.99** | was 1.05 |
+| obi_delay_threshold / flow_delay_threshold | **0.85 / 0.75** | v15 loosened for earlier entry |
+| buy_size_usd / max_position_usd | 10 / 100 (panic 116) | |
+| max_unmatched_usd | 30 | |
+| min_first_leg_price / sniper_threshold / value_zone_high | 0.15 / 0.35 / 0.43 | |
+| panic_time_seconds, theta_*, sniper_signal_min_time | spec-derived (10s/180s/30s/90s @ 5m) | NOT in conf — `market_spec.py` per timeframe |
 
 **Known weaknesses:** unmatched-leg risk at settlement; fee curve `price·(1−price)·0.0625` eats
-thin spreads near 50¢; rejection rate at thin books; kill switch only checked post-settlement (B8);
-engine/CLOB desync possible on executor exception (B7).
+thin spreads near 50¢; ~60% rejection rate (EXP-002 — dominated by atomic_entry_too_wide);
+paper fill model optimism unquantified vs live. (B7 desync guard + B8 pre-entry kill switch
+closed 2026-06-10.)
+
+**Baseline (EXP-002, 2026-06-10, paper):** +$11.69/window avg, std $21.46, 61% win rate,
+n=18 (BTC 5m+15m). This is the bar every param change and new strategy compares against.
 
 **Version history (git archaeology, 2026-06-10):**
 - **v8/v9** (pre-main, deleted branch) — original pair bot + Bloomberg-style dashboard prototype.
@@ -62,6 +66,43 @@ engine/CLOB desync possible on executor exception (B7).
 ---
 
 # Part 2 — Experiment Log
+
+### EXP-002 · 2026-06-10 · pairs: v15 baseline established (paper, BTC 5m+15m)
+**Type:** paper
+**Hypothesis:** Stock v15 has positive expectancy after fees in current BTC conditions; establish
+the mean AND variance per window that all future experiments compare against.
+**Change:** none — stock v15 params (run predates B12, so params came from the code; identical
+values now live in `strategy.conf [pairs]`).
+**Data:** `data/logs/pair_windows_20260610.csv` (n=18 settled windows, 18:35–21:30 settles,
+run 18:26–21:48 in Omar's terminal), `pair_buys_20260610.csv` (157 real fills; 11 synthetic
+test rows excluded by market label `BTC 5m` without window suffix), `pair_filters_20260610.csv`.
+**Result:**
+| | ALL (n=18) | 5m (n=10) | 15m (n=8) |
+|---|---|---|---|
+| net P&L total | **+$210.45** | +$119.24 | +$91.21 |
+| avg / window | **+$11.69** (std $21.46) | +$11.92 (std $14.30) | +$11.40 (std $29.25) |
+| median / window | +$7.92 | +$11.00 | +$1.25 |
+| win rate | 61% | 70% | 50% |
+| range | −$18.44 .. +$57.78 | −$4.09 .. +$41.48 | −$18.44 .. +$57.78 |
+| pairs / window | 51.4 | 40.5 | 65.0 |
+| avg pair cost | $0.757 | $0.729 | $0.791 |
+| rejection rate | 60.1% | 59.6% | 60.6% |
+| participation | — | 10/~40 windows (25%) | 8/~13 (62%) |
+
+Avg fee 1.42%/fill; slippage ≈ 0.1¢ (paper VWAP model); max unhedged avg $14.81; zones:
+sniper 44 / value 29 / panic 11 (panic fills only on 5m). Pair costs avg $0.73–0.79 — well
+under the $0.96 ceiling, so completed pairs locked 17–27¢ gross.
+**Stats honesty:** mean is ~2.3 SE above zero (SE ≈ $5.06) — suggestive, not conclusive at n=18.
+Single 3.5h evening session (15:30–18:30 UTC), single asset, paper fill model is optimistic
+(no queue competition; 100% fill ≥ 500ms ask age). Treat as upper bound.
+**Verdict:** ITERATE — baseline locked in as the comparison bar (+$11.69/win, std $21.46).
+Not ADOPT-for-live until the sample covers more sessions/times-of-day and the paper-vs-live
+fill gap is measured (dry-run or small-size live windows).
+**Follow-up:** (a) extend baseline across different times of day — pool into EXP-002 (params
+identical); (b) EXP-003 candidate from rejection analysis: 60% rejection dominated by
+atomic_entry_too_wide — probe `atomic_entry_max_pair` 0.99→1.00 and `max_pair_cost` 0.96→0.94
+in opposite directions to map the frontier; (c) 15m variance (std $29) is 2× its mean —
+needs 3–4× the sample of 5m for the same confidence.
 
 ### EXP-001 · 2026-06-10 · pairs: re-baseline v15 with working fill logging
 **Type:** paper

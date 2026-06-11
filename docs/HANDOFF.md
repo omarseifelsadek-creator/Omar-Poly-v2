@@ -3,31 +3,39 @@
 > Claude: read this FIRST each session. Overwrite (don't append) at session end or after any
 > major milestone. Keep under 60 lines — git history is the archive.
 
-**Updated:** 2026-06-10 (late evening) · **Branch:** main · **EXP-002 paper run LIVE in Omar's terminal**
+**Updated:** 2026-06-10 (22:20) · **Branch:** main · **No runs active**
 
 ## Current Focus
 
-Everything done: audit → criticals → live-safety → resilience → tests → splits → B12 → full cleanup (ruff, dead code, --token rewired, tools/). EXP-002 accumulating. Next: close EXP-002, then new-strategy work.
+EXP-002 CLOSED — v15 paper baseline: **+$11.69/window avg, std $21.46, 61% win rate (n=18)**.
+Revamp is complete (audit -> fixes -> tests -> structure -> config -> cleanup). Next: grow the
+baseline sample and start param/new-strategy experiments.
 
 ## State of the World
 
-- **EXP-002 running in Omar's own terminal** (foreground, started ~18:25 Jun 10, btc 5m+15m paper, caffeinate). Morning: Omar Ctrl+C once → settle → say "close EXP-002".
-- Suite: **82 tests green**; `env/bin/python -m ruff check .` fully clean (config in pyproject.toml; dev deps in requirements-dev.txt).
-- Structure: main.py = thin dispatcher → `modes/`; analysis scripts in `tools/` (research_cli, streamlit_dashboard, generate_pair_report, pair_backtest, demo_dashboard); `--token` works again (OBIApp direct).
-- 21 backlog items done today (B1-B19 except residuals). Open: B13-residual, B20 (dedup unify), B21 (regime thresholds → settings) — all P2.
+- Baseline locked in STRATEGY_LOG Part 2 (EXP-002) + registry. Mean is ~2.3 SE above zero —
+  suggestive, not conclusive; paper fill model is an upper bound.
+- Omar's overnight run ended early (Ctrl+C 21:48 after 3.5h, 18 windows). No process running now.
+- Suite 82 green; ruff clean; everything pushed through the EXP-002 close.
+- Experiments are conf edits now: `strategy.conf [pairs]` -> restart runner -> params stamp per window.
 
 ## Next Steps (in order)
 
-1. **Close EXP-002**: stats from `pair_windows_20260610/11.csv` — EXCLUDE windows settled before 18:25 Jun 10 (discarded Claude run); in `pair_buys_*`, synthetic test rows have market label `BTC 5m` (no window-time suffix) — exclude those too. Write STRATEGY_LOG Part 2 entry with per-TF net_pnl/window, pairs/window, rejection_rate, variance + verdict. (Early peek at 12 windows: +$10.37/window avg, range −$18→+$58.)
-2. EXP-003+: param experiments are now a conf edit (B12 done) — edit `[pairs]` in strategy.conf, restart runner, new params apply per window and stamp to `pair_params_*.csv`.
-3. New-strategy ideation off the baseline data → BACKLOG Ideas. (`obi_velocity_5s/30s` is a ready, unconsumed ingredient — B17.)
+1. EXP-002b: more baseline windows at different times of day (`--headless` paper, stock conf).
+   Pool with n=18. Aim n >= 50 before trusting comparisons.
+2. EXP-003: atomic_entry_max_pair / max_pair_cost frontier probe (rejections are 60%, mostly
+   atomic_entry_too_wide — details in STRATEGY_LOG EXP-002 follow-up).
+3. New-strategy ideation: `obi_velocity_5s/30s` (B17) is computed and unconsumed; intelligence
+   layer (CVD, regime, detectors) only feeds the dashboard today.
+4. P2 leftovers when convenient: B13-residual, B20 (dedup unify), B21 (regime thresholds).
 
 ## Watch Out
 
-- **Omar's EXP-002 terminal process predates B12** — it runs the OLD code (conf still ignored for it). Conf edits affect only runners started after tonight. Don't edit `[pairs]` values until EXP-002 closes anyway (baseline purity).
-- After any "AMBIGUOUS LIVE ORDER" banner: verify positions on polymarket.com; kill-switch cap approximate until then (RUNBOOK §3).
-- Don't run paper smokes or fill-producing tests outside pytest while EXP-002 runs — conftest redirects test CSVs, but ad-hoc `main.py --pairs` runs write into the same dated CSVs.
+- 15m variance is 2x its mean (std $29 vs +$11.40) — needs 3-4x the 5m sample for equal confidence.
+- Paper-vs-live fill gap unmeasured — before any live resumption, run dry-run windows or
+  tiny-size live and compare fill rates to paper (RUNBOOK ladder).
+- pair_params_*.csv only exists for runs started after B12 (Omar's EXP-002 run predates it).
 
 ## Open Questions (for Omar)
 
-- (none — sleep optional, the bot doesn't need supervision)
+- (none)

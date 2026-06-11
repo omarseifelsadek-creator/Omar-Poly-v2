@@ -5,7 +5,8 @@
 
 ## Now (P0)
 
-- [ ] EXP-002 · Re-baseline PAIRS-v15: multi-hour paper run (headless 5m+15m), close entry in STRATEGY_LOG with net_pnl/window, pairs/window, rejection_rate.
+- [ ] EXP-002b · Extend the baseline across different times of day (same v15 params — pool with EXP-002's n=18). Just rerun `--headless` paper; windows self-stamp params now.
+- [ ] EXP-003 · Param probe from rejection analysis: `atomic_entry_max_pair` and `max_pair_cost` frontier (see EXP-002 follow-up in STRATEGY_LOG).
 
 ## Next (P1)
 
@@ -22,6 +23,8 @@
 - (empty — new strategy ideas land here first)
 
 ## Done
+
+- [x] 2026-06-10 · EXP-002 · v15 paper baseline CLOSED: **+$11.69/window avg, std $21.46, 61% win rate, n=18** (BTC 5m+15m, 3.5h evening session). Full entry in STRATEGY_LOG Part 2.
 
 - [x] 2026-06-10 · Cleanup sweep · ruff adopted (pyproject.toml, requirements-dev.txt), 113 findings → 0; dead `rotate_early` key removed; lost 🎯 snipe marker restored to BUY output; analysis scripts → `tools/` (test_dashboard → demo_dashboard); RUNBOOK stale B7/B8/B12 claims fixed.
 - [x] 2026-06-10 · B19 · `--token` rewired to launch OBIApp directly (was parsed-but-dead); 171 lines of dead selectors removed from modes/select.py.
