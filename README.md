@@ -70,16 +70,15 @@ python3 main.py --record --asset btc --timeframe 5m
 
 Output lands in `data/logs/l2_*.csv`.
 
-## BTC 5-Minute Auto-Rotate (Intelligence only)
+## Main Menu
 
-Watch the current BTC 5-minute Up/Down market and automatically rotate to the
-next window when it expires:
+Running with no flags opens the bot suite menu — pair trading
+(paper / dry-run / live / headless), order book analysis (under
+construction), and the data recorder. Ctrl+C inside a bot returns
+to the menu:
 
 ```bash
-python3 main.py --btc5m
-python3 main.py --btc5m --btc5m-side auto      # default
-python3 main.py --btc5m --btc5m-side up
-python3 main.py --btc5m --btc5m-side down
+python3 main.py
 ```
 
 ## The Dashboard

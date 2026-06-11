@@ -5,6 +5,8 @@
 
 ## Now (P0)
 
+- [ ] Order Book Analysis menu flow — design TAILOR-MADE with Omar (placeholder at `modes/launcher.py:_order_book_analysis_flow`; raw materials: get_active_markets / search_markets / get_market_by_slug + OBIApp).
+
 - [ ] EXP-002b · Extend the baseline across different times of day (same v15 params — pool with EXP-002's n=18). Just rerun `--headless` paper; windows self-stamp params now.
 - [ ] EXP-003 · Param probe from rejection analysis: `atomic_entry_max_pair` and `max_pair_cost` frontier (see EXP-002 follow-up in STRATEGY_LOG).
 
@@ -23,6 +25,8 @@
 - (empty — new strategy ideas land here first)
 
 ## Done
+
+- [x] 2026-06-10 · Launcher · `python main.py` = main menu w/ bot registry (Pair Trading submenu: paper/dry-run/live/headless; Data Recorder; Order Book Analysis placeholder). Ctrl+C returns to menu. Deleted: --btc5m + modes/btc5m.py, modes/select.py. Flags remain the scripted bypass.
 
 - [x] 2026-06-10 · Synthetic Market Microstructure Engine DELETED (~1,330 lines: ui/cyber_engine, ui/cyber_dashboard, --slug/--search args, synthetic-only pickers). No-flag default is now the pair-trading menu. Menu-chosen live mode now passes the typed-yes gate (was a bypass).
 

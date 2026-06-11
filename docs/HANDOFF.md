@@ -3,39 +3,41 @@
 > Claude: read this FIRST each session. Overwrite (don't append) at session end or after any
 > major milestone. Keep under 60 lines — git history is the archive.
 
-**Updated:** 2026-06-10 (22:20) · **Branch:** main · **No runs active**
+**Updated:** 2026-06-10 (23:00, end of revamp marathon) · **Branch:** main · **No runs active**
 
 ## Current Focus
 
-EXP-002 CLOSED — v15 paper baseline: **+$11.69/window avg, std $21.46, 61% win rate (n=18)**.
-Revamp is complete (audit -> fixes -> tests -> structure -> config -> cleanup). Next: grow the
-baseline sample and start param/new-strategy experiments.
+Launcher landed: `python main.py` = main menu (Pair Trading / Order Book Analysis / Data Recorder).
+**Order Book Analysis is a PLACEHOLDER — Omar wants to design it tailor-made, together, next session.**
 
 ## State of the World
 
-- Baseline locked in STRATEGY_LOG Part 2 (EXP-002) + registry. Mean is ~2.3 SE above zero —
-  suggestive, not conclusive; paper fill model is an upper bound.
-- Omar's overnight run ended early (Ctrl+C 21:48 after 3.5h, 18 windows). No process running now.
-- Suite 82 green; ruff clean; everything pushed through the EXP-002 close.
-- Experiments are conf edits now: `strategy.conf [pairs]` -> restart runner -> params stamp per window.
+- **Main menu** (`modes/launcher.py`): bot registry pattern — future bots (weather bot is being
+  researched) register one `BotEntry` in `launcher.BOTS` and appear automatically. Ctrl+C in a bot
+  returns to menu; q/Ctrl+C at menu exits. Live always passes the typed-`yes` gate.
+- Pair Trading submenu: Paper / Dry-run / Live / Headless (headless then asks paper-or-live).
+- DELETED today: synthetic engine (`ui/cyber_*`), `--btc5m` + `modes/btc5m.py`, `modes/select.py`
+  (launcher owns all menus now), `--slug`/`--search` args.
+- CLI flags = scripted bypass (`--headless`, `--pairs --asset --timeframe`, `--token`, `--record`).
+- Suite 82 green, ruff clean. **v15 paper baseline: +$11.69/window, std $21.46, n=18** (EXP-002,
+  STRATEGY_LOG Part 2). All backlog B-items done except P2 leftovers (B13-residual, B20, B21).
 
 ## Next Steps (in order)
 
-1. EXP-002b: more baseline windows at different times of day (`--headless` paper, stock conf).
-   Pool with n=18. Aim n >= 50 before trusting comparisons.
-2. EXP-003: atomic_entry_max_pair / max_pair_cost frontier probe (rejections are 60%, mostly
-   atomic_entry_too_wide — details in STRATEGY_LOG EXP-002 follow-up).
-3. New-strategy ideation: `obi_velocity_5s/30s` (B17) is computed and unconsumed; intelligence
-   layer (CVD, regime, detectors) only feeds the dashboard today.
-4. P2 leftovers when convenient: B13-residual, B20 (dedup unify), B21 (regime thresholds).
+1. **Design Order Book Analysis with Omar** (tailor-made — do NOT build without his input).
+   Stub: `modes/launcher.py:_order_book_analysis_flow`. Raw materials: `RestClient.get_active_markets`
+   (top by 24h volume) + `search_markets` + `get_market_by_slug` (data/rest_client.py), OBIApp
+   (modes/intelligence.py). His stated shape: filter by top markets / keyword / slug → dashboard.
+2. EXP-002b: grow the baseline sample (`--headless` paper, stock conf, different times of day; pool with n=18, aim n≥50).
+3. EXP-003: atomic_entry_max_pair / max_pair_cost frontier probe (60% rejections, mostly atomic_entry_too_wide).
+4. Weather-market bot (Omar researching) → will register as a launcher BotEntry when ready.
 
 ## Watch Out
 
-- 15m variance is 2x its mean (std $29 vs +$11.40) — needs 3-4x the 5m sample for equal confidence.
-- Paper-vs-live fill gap unmeasured — before any live resumption, run dry-run windows or
-  tiny-size live and compare fill rates to paper (RUNBOOK ladder).
-- pair_params_*.csv only exists for runs started after B12 (Omar's EXP-002 run predates it).
+- The pairs menu default in the launcher is Paper — Live and headless-live both gate on typed `yes`.
+- Paper-vs-live fill gap still unmeasured — RUNBOOK ladder before any live resumption.
+- `tools/` scripts run from repo root (`python tools/research_cli.py summary`).
 
 ## Open Questions (for Omar)
 
-- (none)
+- Order Book Analysis design session — his requirements first.

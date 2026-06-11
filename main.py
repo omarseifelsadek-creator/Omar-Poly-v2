@@ -1,28 +1,31 @@
 """
-main.py — CLI entry point and mode dispatcher for Polymarket OBI.
+main.py — CLI entry point for Polymarket OBI.
 
-Thin by design (B13): parse args, gate live mode, dispatch. The modes
-themselves live in modes/ (intelligence dashboard, btc5m rotation,
-market pickers) and execution/ (pairs, recorder).
+No flags → the main menu (modes/launcher.py): every bot in one place.
+Flags → direct dispatch for scripted runs (nohup/caffeinate can't
+answer menus).
 
 HOW TO RUN:
-    python main.py                  # Pair trading (interactive menu — the default)
-    python main.py --pairs          # Same, or add --asset/--timeframe to skip the menu
+    python main.py                  # Main menu (pair trading / analysis / recorder)
+    python main.py --pairs --asset btc --timeframe 5m --mode paper
     python main.py --headless       # Both BTC timeframes, CSV logging only
     python main.py --token <ID>     # Intelligence dashboard on a single token
-    python main.py --btc5m          # Auto-rotating intelligence dashboard
     python main.py --record         # L2 book recorder for backtesting
 """
 
 import asyncio
 import argparse
 import logging
-import sys
 
 from rich.console import Console
 
-from modes.btc5m import run_btc5m
-from modes.select import select_pair_market
+from modes.launcher import (
+    confirm_live_mode,
+    run_headless,
+    run_launcher,
+    run_pairs,
+    run_recorder,
+)
 
 # Configure logging (only show warnings+ to avoid cluttering the terminal)
 logging.basicConfig(
@@ -41,7 +44,7 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                              # Pair trading (interactive menu)
+  python main.py                              # Main menu (interactive)
   python main.py --pairs --asset btc --timeframe 5m --mode paper
   python main.py --headless --max-loss 50    # Both BTC timeframes, shared kill switch
   python main.py --token <TOKEN_ID>           # Intelligence dashboard on one token
@@ -60,16 +63,8 @@ Examples:
         help="Trading mode: paper (simulated) | dry-run (sign only, no post_order) | live (real orders)",
     )
     parser.add_argument(
-        "--btc5m", action="store_true",
-        help="Auto-rotating BTC 5-minute Up/Down markets",
-    )
-    parser.add_argument(
-        "--btc5m-side", type=str, default="auto", choices=["auto", "up", "down"],
-        help="Which side to watch: auto (picks active side), up, or down",
-    )
-    parser.add_argument(
         "--pairs", action="store_true",
-        help="Pair trading mode: accumulate YES+NO pairs for guaranteed profit",
+        help="Pair trading with dashboard (needs --asset + --timeframe to skip the menu)",
     )
     parser.add_argument(
         "--headless", action="store_true",
@@ -82,12 +77,12 @@ Examples:
     parser.add_argument(
         "--asset", type=str, default=None,
         choices=["btc", "eth", "sol", "xrp"],
-        help="Crypto asset for pair trading (btc, eth, sol, xrp). Skips interactive menu.",
+        help="Crypto asset (btc, eth, sol, xrp)",
     )
     parser.add_argument(
         "--timeframe", type=str, default=None,
         choices=["5m", "15m"],
-        help="Timeframe for pair trading (5m, 15m). Skips interactive menu.",
+        help="Timeframe (5m, 15m)",
     )
     parser.add_argument(
         "--max-loss", type=float, default=None,
@@ -100,50 +95,19 @@ Examples:
     return parser.parse_args()
 
 
-def confirm_live_mode(args) -> bool:
-    """
-    Gate real-money trading behind an explicit typed confirmation.
-
-    Returns True if it is safe to proceed. Scripted/non-interactive runs
-    must pass --yes; an interactive run must type 'yes' exactly.
-    """
-    if args.mode != "live" or args.yes:
-        return True
-
-    console.print("\n[bold red]═══ LIVE MODE — REAL MONEY ═══[/bold red]")
-    console.print(f"  Asset/timeframe: {(args.asset or 'btc').upper()}/{args.timeframe or '5m'}")
-    console.print(f"  Kill switch:     {'$' + str(args.max_loss) if args.max_loss else '[bold red]NONE SET[/bold red] (consider --max-loss)'}")
-    console.print("  Orders are FOK against the Polymarket CLOB and cannot be recalled.\n")
-
-    if not sys.stdin.isatty():
-        console.print("[red]Non-interactive session: pass --yes to confirm live mode.[/red]")
-        return False
-
-    answer = input("Type 'yes' to start live trading: ").strip().lower()
-    if answer != "yes":
-        console.print("[yellow]Live mode not confirmed — exiting.[/yellow]")
-        return False
-    return True
-
-
-# ──────────────────────────────────────────────────────────────
-# BTC 5-MINUTE AUTO-ROTATING MODE
-# ──────────────────────────────────────────────────────────────
-
-
-
 async def main():
     args = parse_args()
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Real-money gate — covers every mode before any runner is constructed
-    if not confirm_live_mode(args):
+    # Real-money gate for flag-driven runs (menu flows gate themselves)
+    if args.mode == "live" and not confirm_live_mode(
+        args.asset, args.timeframe, args.max_loss, assume_yes=args.yes
+    ):
         return
 
-    # Direct token — intelligence dashboard on a single token (B19:
-    # this arg was parsed-but-dead for months; now does what the docs say)
+    # Direct token — intelligence dashboard on a single token
     if args.token:
         from modes.intelligence import OBIApp
 
@@ -155,126 +119,27 @@ async def main():
         await app.run()
         return
 
-    # BTC 5-minute auto-rotating mode
-    if args.btc5m:
-        await run_btc5m(args)
-        return
-
-    # L2 order book recorder — observe and log, no trading
+    # L2 order book recorder
     if args.record:
-        from execution.book_recorder import BookRecorder
-        from execution.market_spec import make_market_spec
-
-        spec = make_market_spec(args.asset or "btc", args.timeframe or "5m")
-        recorder = BookRecorder(spec=spec)
-
-        import signal
-        signal.signal(signal.SIGINT, lambda s, f: recorder.request_stop())
-
-        await recorder.run()
+        await run_recorder(args.asset or "btc", args.timeframe or "5m")
         return
 
-    # Headless multi-runner: both BTC timeframes simultaneously, no dashboard
+    # Headless multi-runner
     if args.headless:
-        from execution.pair_runner import PairRunner
-        from execution.market_spec import make_market_spec
-
-        asset = args.asset or "btc"
-        mode = args.mode
-        timeframes = ["5m", "15m"]
-
-        if args.timeframe:
-            # Single headless runner for specific timeframe
-            timeframes = [args.timeframe]
-
-        console.print("\n[bold #00FFFF]═══ HEADLESS MODE ═══[/bold #00FFFF]")
-        console.print(f"  Asset: [bold]{asset.upper()}[/bold]  Timeframes: {', '.join(timeframes)}")
-        console.print(f"  Mode: [bold]{mode}[/bold]  Runners: {len(timeframes)}")
-        console.print("  Logging to: data/logs/")
-        console.print("  [dim]Press Ctrl+C to stop all runners[/dim]\n")
-
-        # One shared budget: --max-loss caps the SESSION, not each runner (B8)
-        from execution.kill_switch import KillSwitch
-        shared_switch = KillSwitch(args.max_loss)
-
-        runners = []
-        for tf in timeframes:
-            spec = make_market_spec(asset, tf)
-            runner = PairRunner(
-                mode=mode, spec=spec, headless=True,
-                max_loss=args.max_loss, kill_switch=shared_switch,
-            )
-            runners.append(runner)
-            console.print(f"  [#00FF41]●[/#00FF41] {asset.upper()}/{tf} runner created")
-
-        console.print()
-
-        # Run all runners as tasks so we can cancel them on Ctrl+C
-        tasks = [asyncio.create_task(r.run()) for r in runners]
-
-        # Install signal handler: first Ctrl+C → graceful stop, second → force kill
-        import signal
-        _stop_count = 0
-
-        def _headless_stop(sig, frame):
-            nonlocal _stop_count
-            _stop_count += 1
-            if _stop_count == 1:
-                console.print(
-                    "\n[bold yellow]⚠  Ctrl+C — stopping all runners after current windows settle...[/bold yellow]"
-                )
-                for r in runners:
-                    r.request_stop()
-            else:
-                console.print("\n[bold red]Force stopping — flushing reports...[/bold red]")
-                for r in runners:
-                    try:
-                        r._print_session_summary()
-                    except Exception:
-                        pass
-                for t in tasks:
-                    t.cancel()
-
-        signal.signal(signal.SIGINT, _headless_stop)
-
-        # return_exceptions=True so one runner's MarketDiscoveryError
-        # (or any other failure) doesn't cancel its siblings. Surface
-        # each error individually so the user knows which timeframe died.
-        try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-        except asyncio.CancelledError:
-            return
-
-        for runner, result in zip(runners, results):
-            if isinstance(result, asyncio.CancelledError) or result is None:
-                continue
-            if isinstance(result, BaseException):
-                console.print(
-                    f"[bold red]✗ {runner.spec.display_name} runner failed:[/bold red] "
-                    f"{type(result).__name__}: {result}"
-                )
+        timeframes = [args.timeframe] if args.timeframe else ["5m", "15m"]
+        await run_headless(args.asset or "btc", args.mode, timeframes, args.max_loss)
         return
 
-    # Pair trading — explicit --pairs or the no-flag default (the synthetic
-    # visualization engine that used to own the default was removed 2026-06-10)
-    from execution.pair_runner import PairRunner
-    from execution.market_spec import make_market_spec
-
+    # Pair trading with all params supplied — direct run
     if args.pairs and args.asset and args.timeframe:
+        from execution.market_spec import make_market_spec
+
         spec = make_market_spec(args.asset, args.timeframe)
-        mode = args.mode
-    else:
-        spec, mode = select_pair_market()
+        await run_pairs(spec, args.mode, args.max_loss)
+        return
 
-    # The startup gate ran against the CLI --mode; if live was chosen in
-    # the interactive menu instead, it must pass the same typed-yes gate.
-    if mode == "live" and args.mode != "live":
-        args.mode = mode
-        if not confirm_live_mode(args):
-            return
-
-    runner = PairRunner(mode=mode, spec=spec, max_loss=args.max_loss)
-    await runner.run()
+    # Everything else lands on the main menu (bare --pairs included)
+    await run_launcher(max_loss=args.max_loss, assume_yes=args.yes)
 
 
 if __name__ == "__main__":

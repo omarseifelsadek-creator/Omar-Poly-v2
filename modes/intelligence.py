@@ -5,9 +5,8 @@ Moved verbatim from main.py (B13). The full pipeline for one token:
 WebSocket -> orderbook/level tracker -> metrics + detectors + momentum
 + CVD -> insights -> Rich terminal UI + Telegram + SQLite.
 
-Reachable via --btc5m (auto-rotating windows). NOTE: the --token direct
-path is currently a dead CLI arg (B19) — parse_args accepts it but
-main() never wires it here.
+Reachable via --token <ID> (direct) and, once designed, the launcher's
+Order Book Analysis menu.
 """
 
 import asyncio

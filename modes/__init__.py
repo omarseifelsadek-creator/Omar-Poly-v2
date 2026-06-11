@@ -1,16 +1,13 @@
 """
-modes/ — one module per CLI mode, extracted from main.py (B13).
+modes/ — one module per CLI mode plus the launcher (B13).
 
-main.py stays a thin dispatcher: parse args, gate live mode, hand off
-to the right mode module.
+| Module          | Reached via                  | What it runs                         |
+|-----------------|------------------------------|--------------------------------------|
+| launcher.py     | python main.py (no flags)    | Main menu: every bot, one front door |
+| intelligence.py | --token <ID> (and, later,    | OBIApp — single-token Rich dashboard |
+|                 | the Order Book Analysis menu)|                                      |
 
-| Module          | CLI flag            | What it runs                          |
-|-----------------|---------------------|---------------------------------------|
-| intelligence.py | (via --btc5m)       | OBIApp — single-token Rich dashboard   |
-| btc5m.py        | --btc5m             | Auto-rotating 5m windows around OBIApp |
-| select.py       | (interactive menus) | Market pickers shared by modes         |
-
-Pairs (the no-flag default) / headless / record remain inline in main() —
-each is a short wiring block around classes that live in execution/.
-The synthetic visualization engine was removed 2026-06-10.
+History: btc5m rotation, the synthetic visualization engine, and the old
+market pickers were removed 2026-06-10 — the launcher superseded them.
+Future bots (weather, directional, ...) register in launcher.BOTS.
 """
